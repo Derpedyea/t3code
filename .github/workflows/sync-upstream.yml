@@ -107,7 +107,7 @@ jobs:
             exit 0
           fi
 
-          echo "::error::Merge conflicts require Codex repair, but no Codex credential is configured. Prefer CODEX_AUTH_JSON_B64 or CODEX_ACCESS_TOKEN to use ChatGPT-backed Codex; OPENAI_API_KEY remains a usage-billed fallback."
+          echo "::error::Merge conflicts require Codex repair, but no Codex credential is configured. CODEX_AUTH_JSON_B64 or CODEX_ACCESS_TOKEN uses ChatGPT-backed Codex on trusted runners; OPENAI_API_KEY is the recommended CI fallback."
           exit 1
 
       - name: Repair merge conflicts with Codex
