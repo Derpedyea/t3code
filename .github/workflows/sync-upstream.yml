@@ -23,6 +23,7 @@ jobs:
       TARGET_BRANCH: main
       CODEX_MERGE_MODEL: ${{ vars.CODEX_MERGE_MODEL || 'gpt-5.5' }}
       CODEX_MERGE_REASONING_EFFORT: ${{ vars.CODEX_MERGE_REASONING_EFFORT || 'medium' }}
+      CODEX_HOME: ${{ runner.temp }}/codex-home
     steps:
       - name: Checkout fork main
         uses: actions/checkout@v4
@@ -74,35 +75,47 @@ jobs:
           node-version: "22"
 
       - name: Configure Codex auth
+        id: codex_auth
         if: steps.merge.outputs.conflict == 'true'
         shell: bash
         env:
-          CODEX_HOME: ${{ runner.temp }}/codex-home
           CODEX_AUTH_JSON_B64: ${{ secrets.CODEX_AUTH_JSON_B64 }}
+          CODEX_ACCESS_TOKEN: ${{ secrets.CODEX_ACCESS_TOKEN }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         run: |
           set -euo pipefail
 
+          mkdir -p "${CODEX_HOME}"
+          cat > "${CODEX_HOME}/config.toml" <<'TOML'
+          cli_auth_credentials_store = "file"
+          TOML
+
           if [ -n "${CODEX_AUTH_JSON_B64}" ]; then
-            mkdir -p "${CODEX_HOME}"
             printf '%s' "${CODEX_AUTH_JSON_B64}" | base64 -d > "${CODEX_HOME}/auth.json"
             chmod 600 "${CODEX_HOME}/auth.json"
+            echo "auth_mode=chatgpt" >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+
+          if [ -n "${CODEX_ACCESS_TOKEN}" ]; then
+            echo "auth_mode=chatgpt" >> "${GITHUB_OUTPUT}"
             exit 0
           fi
 
           if [ -n "${OPENAI_API_KEY}" ]; then
+            echo "auth_mode=api" >> "${GITHUB_OUTPUT}"
             exit 0
           fi
 
-          echo "::error::Merge conflicts require Codex repair, but neither CODEX_AUTH_JSON_B64 nor OPENAI_API_KEY is configured."
+          echo "::error::Merge conflicts require Codex repair, but no Codex credential is configured. Prefer CODEX_AUTH_JSON_B64 or CODEX_ACCESS_TOKEN to use ChatGPT-backed Codex; OPENAI_API_KEY remains a usage-billed fallback."
           exit 1
 
       - name: Repair merge conflicts with Codex
         if: steps.merge.outputs.conflict == 'true'
         shell: bash
         env:
-          CODEX_HOME: ${{ runner.temp }}/codex-home
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          CODEX_ACCESS_TOKEN: ${{ secrets.CODEX_ACCESS_TOKEN }}
+          CODEX_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         run: |
           set -euo pipefail
 
