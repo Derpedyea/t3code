@@ -30,7 +30,6 @@ jobs:
         with:
           ref: ${{ env.TARGET_BRANCH }}
           fetch-depth: 0
-          persist-credentials: false
 
       - name: Configure git author
         run: |
@@ -191,12 +190,10 @@ jobs:
           fi
 
       - name: Push fork main
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
         run: |
           if [ "$(git rev-parse HEAD)" = "$(git rev-parse "origin/${TARGET_BRANCH}")" ]; then
             echo "Fork ${TARGET_BRANCH} is already up to date with upstream ${UPSTREAM_BRANCH}."
             exit 0
           fi
 
-          git push "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" "HEAD:${TARGET_BRANCH}"
+          git push origin "HEAD:${TARGET_BRANCH}"
