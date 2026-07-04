@@ -241,6 +241,8 @@ describe("readEnvironmentFromWindowsShell", () => {
     expect(command).toContain("[Environment]::GetEnvironmentVariable('Path', 'Machine')");
     expect(command).toContain("[Environment]::GetEnvironmentVariable('Path', 'User')");
     expect(command).toContain(") | Where-Object { $null -ne $_ -and $_.Length -gt 0 }");
+    expect(command).not.toContain("@(; ");
+    expect(command).not.toContain(",; ");
     expect(command).not.toContain("Where-Object { $null -ne $_ -and $_.Length -gt 0 })");
   });
 

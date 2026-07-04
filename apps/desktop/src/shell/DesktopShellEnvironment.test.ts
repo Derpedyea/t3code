@@ -251,6 +251,8 @@ describe("DesktopShellEnvironment", () => {
       assert.include(captureCommand, "[Environment]::GetEnvironmentVariable('Path', 'Machine')");
       assert.include(captureCommand, "[Environment]::GetEnvironmentVariable('Path', 'User')");
       assert.include(captureCommand, ") | Where-Object { $null -ne $_ -and $_.Length -gt 0 }");
+      assert.notInclude(captureCommand, "@(; ");
+      assert.notInclude(captureCommand, ",; ");
       assert.notInclude(captureCommand, "Where-Object { $null -ne $_ -and $_.Length -gt 0 })");
     }),
   );

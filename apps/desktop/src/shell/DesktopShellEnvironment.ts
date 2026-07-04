@@ -196,11 +196,7 @@ const captureWindowsEnvironmentCommand = (names: ReadonlyArray<string>) =>
       const valueCapture =
         name.toUpperCase() === "PATH"
           ? [
-              "$parts = @(",
-              "  [Environment]::GetEnvironmentVariable('Path', 'Process'),",
-              "  [Environment]::GetEnvironmentVariable('Path', 'Machine'),",
-              "  [Environment]::GetEnvironmentVariable('Path', 'User')",
-              ") | Where-Object { $null -ne $_ -and $_.Length -gt 0 }",
+              "$parts = @([Environment]::GetEnvironmentVariable('Path', 'Process'), [Environment]::GetEnvironmentVariable('Path', 'Machine'), [Environment]::GetEnvironmentVariable('Path', 'User')) | Where-Object { $null -ne $_ -and $_.Length -gt 0 }",
               "$value = [string]::Join(';', $parts)",
             ]
           : [`$value = [Environment]::GetEnvironmentVariable('${name}')`];
