@@ -635,14 +635,18 @@ function buildDevinDiscoveredModelsFromSessionModelState(
   const seen = new Set<string>();
   return modelState.availableModels
     .map((model): ServerProviderModel | undefined => {
-      const slug = resolveDevinAcpBaseModelId(model.modelId);
+      const variant = parseDevinAcpModelVariant({
+        value: model.modelId,
+        name: model.name,
+      });
+      const slug = variant?.baseModelId ?? resolveDevinAcpBaseModelId(model.modelId);
       if (!slug || seen.has(slug)) {
         return undefined;
       }
       seen.add(slug);
       return {
         slug,
-        name: model.name.trim() || slug,
+        name: (variant?.baseModelName ?? model.name.trim()) || slug,
         isCustom: false,
         capabilities: EMPTY_CAPABILITIES,
       };

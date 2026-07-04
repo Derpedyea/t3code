@@ -1,8 +1,19 @@
 import { describe, expect, it } from "@effect/vitest";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import type * as EffectAcpSchema from "effect-acp/schema";
 
-import { makeAcpThreadLock, selectPermissionOptionId } from "./AcpAdapterRuntime.ts";
+import {
+  ApprovalRequestId,
+  ProviderDriverKind,
+  type ProviderApprovalDecision,
+} from "@t3tools/contracts";
+
+import {
+  makeAcpThreadLock,
+  respondToAcpPermissionRequest,
+  selectPermissionOptionId,
+} from "./AcpAdapterRuntime.ts";
 
 describe("AcpAdapterRuntime", () => {
   it("falls back to allow_once for acceptForSession when allow_always is unavailable", () => {
@@ -35,6 +46,32 @@ describe("AcpAdapterRuntime", () => {
       );
 
       expect(events).toEqual(["first", "second"]);
+    }),
+  );
+
+  it.effect("rejects duplicate ACP permission responses", () =>
+    Effect.gen(function* () {
+      const requestId = ApprovalRequestId.make("permission-1");
+      const decision = yield* Deferred.make<ProviderApprovalDecision>();
+      const pendingApprovals = new Map([[requestId, { decision }]]);
+
+      yield* respondToAcpPermissionRequest({
+        provider: ProviderDriverKind.make("devin"),
+        requestId,
+        decision: "accept",
+        pendingApprovals,
+      });
+      const error = yield* Effect.flip(
+        respondToAcpPermissionRequest({
+          provider: ProviderDriverKind.make("devin"),
+          requestId,
+          decision: "decline",
+          pendingApprovals,
+        }),
+      );
+
+      expect(error._tag).toBe("ProviderAdapterRequestError");
+      expect(error.detail).toContain("Unknown pending approval request");
     }),
   );
 });

@@ -83,6 +83,7 @@ export interface AcpAdapterLiveSessionContext<
   notificationFiber: Fiber.Fiber<void, never> | undefined;
   readonly pendingApprovals: Map<ApprovalRequestId, AcpAdapterPendingApproval>;
   readonly pendingUserInputs: Map<ApprovalRequestId, AcpAdapterPendingUserInput<UserInputResponse>>;
+  readonly promptCapabilities: EffectAcpSchema.PromptCapabilities | undefined;
   currentModelId: string | undefined;
   stopped: boolean;
 }
@@ -423,6 +424,7 @@ export function makeAcpAdapterLive<UserInputResponse>(
             notificationFiber: undefined,
             pendingApprovals,
             pendingUserInputs,
+            promptCapabilities: started.initializeResult.agentCapabilities?.promptCapabilities,
             turns: [],
             lastPlanFingerprint: undefined,
             activeTurnId: undefined,
@@ -499,6 +501,7 @@ export function makeAcpAdapterLive<UserInputResponse>(
                 provider: config.provider,
                 text: input.input,
                 attachments: input.attachments,
+                promptCapabilities: ctx.promptCapabilities,
                 attachmentsDir: serverConfig.attachmentsDir,
                 fileSystem,
               });
@@ -643,62 +646,64 @@ export function makeAcpAdapterLive<UserInputResponse>(
                 } satisfies ProviderTurnStartResult;
               }
 
-              appendPromptResultToTurn(ctx, prepared.turnId, prepared.promptParts, result);
-              ctx.session = {
-                ...ctx.session,
-                status: "running",
-                activeTurnId: prepared.turnId,
-                updatedAt: yield* nowIso,
-                ...(prepared.displayModel ? { model: prepared.displayModel } : {}),
-              };
-              const remainingPrompts = Math.max(0, ctx.promptsInFlight - 1);
-              ctx.promptsInFlight = remainingPrompts;
-
-              if (
-                remainingPrompts === 0 &&
-                ctx.activeTurnId === prepared.turnId &&
-                ctx.session.activeTurnId === prepared.turnId
-              ) {
-                if (ctx.interruptedTurnIds.has(prepared.turnId)) {
+              return yield* Effect.uninterruptible(
+                Effect.gen(function* () {
+                  appendPromptResultToTurn(ctx, prepared.turnId, prepared.promptParts, result);
                   yield* Ref.set(promptSettled, true);
+                  ctx.session = {
+                    ...ctx.session,
+                    status: "running",
+                    activeTurnId: prepared.turnId,
+                    updatedAt: yield* nowIso,
+                    ...(prepared.displayModel ? { model: prepared.displayModel } : {}),
+                  };
+                  const remainingPrompts = Math.max(0, ctx.promptsInFlight - 1);
+                  ctx.promptsInFlight = remainingPrompts;
+
+                  if (
+                    remainingPrompts === 0 &&
+                    ctx.activeTurnId === prepared.turnId &&
+                    ctx.session.activeTurnId === prepared.turnId
+                  ) {
+                    if (ctx.interruptedTurnIds.has(prepared.turnId)) {
+                      return {
+                        threadId: input.threadId,
+                        turnId: prepared.turnId,
+                        resumeCursor: ctx.session.resumeCursor,
+                      } satisfies ProviderTurnStartResult;
+                    }
+                    const completedAt = yield* nowIso;
+                    const { activeTurnId: _completedTurnId, ...readySession } = ctx.session;
+                    ctx.activeTurnId = undefined;
+                    ctx.session = {
+                      ...readySession,
+                      status: "ready",
+                      updatedAt: completedAt,
+                      ...(prepared.displayModel ? { model: prepared.displayModel } : {}),
+                    };
+                    const completedStopReason =
+                      config.completedStopReasonFromPromptResponse(result);
+                    yield* offerRuntimeEvent({
+                      type: "turn.completed",
+                      ...(yield* makeEventStamp()),
+                      provider: config.provider,
+                      threadId: input.threadId,
+                      turnId: prepared.turnId,
+                      payload: {
+                        state: result.stopReason === "cancelled" ? "cancelled" : "completed",
+                        stopReason: completedStopReason,
+                      },
+                    });
+                    ctx.interruptedTurnIds.delete(prepared.turnId);
+                  }
+
                   return {
                     threadId: input.threadId,
                     turnId: prepared.turnId,
                     resumeCursor: ctx.session.resumeCursor,
                   } satisfies ProviderTurnStartResult;
-                }
-                const completedAt = yield* nowIso;
-                const { activeTurnId: _completedTurnId, ...readySession } = ctx.session;
-                ctx.activeTurnId = undefined;
-                ctx.session = {
-                  ...readySession,
-                  status: "ready",
-                  updatedAt: completedAt,
-                  ...(prepared.displayModel ? { model: prepared.displayModel } : {}),
-                };
-                const completedStopReason = config.completedStopReasonFromPromptResponse(result);
-                yield* offerRuntimeEvent({
-                  type: "turn.completed",
-                  ...(yield* makeEventStamp()),
-                  provider: config.provider,
-                  threadId: input.threadId,
-                  turnId: prepared.turnId,
-                  payload: {
-                    state: result.stopReason === "cancelled" ? "cancelled" : "completed",
-                    stopReason: completedStopReason,
-                  },
-                });
-                ctx.interruptedTurnIds.delete(prepared.turnId);
-                yield* Ref.set(promptSettled, true);
-              } else if (remainingPrompts > 0) {
-                yield* Ref.set(promptSettled, true);
-              }
-
-              return {
-                threadId: input.threadId,
-                turnId: prepared.turnId,
-                resumeCursor: ctx.session.resumeCursor,
-              } satisfies ProviderTurnStartResult;
+                }),
+              );
             }),
           );
         }).pipe(

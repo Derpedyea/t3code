@@ -6,6 +6,7 @@ import type * as EffectAcpSchema from "effect-acp/schema";
 import {
   applyDevinAcpModelSelection,
   applyDevinRequestedMode,
+  buildDevinDiscoveredModelsFromSessionSetup,
   buildDevinAcpSpawnInput,
   currentDevinModelIdFromSessionSetup,
   devinAcpModelVariantGroupsFromConfigOptions,
@@ -244,6 +245,24 @@ describe("DevinAcpSupport", () => {
     expect(resolveDevinAcpDisplayModelId(configOptions, "MODEL_PRIVATE_2")).toBe(
       "claude-sonnet-4-5",
     );
+  });
+
+  it("derives discovered model slugs from display names when ACP model ids are opaque", () => {
+    const models = buildDevinDiscoveredModelsFromSessionSetup({
+      sessionId: "session-1",
+      configOptions: [],
+      models: {
+        currentModelId: "MODEL_PRIVATE_3",
+        availableModels: [{ modelId: "MODEL_PRIVATE_3", name: "Claude Sonnet 4.5 Thinking" }],
+      },
+    } satisfies EffectAcpSchema.NewSessionResponse);
+
+    expect(models).toMatchObject([
+      {
+        slug: "claude-sonnet-4-5",
+        name: "Claude Sonnet 4.5",
+      },
+    ]);
   });
 
   it("treats built-in Devin aliases as covering previous discovered concrete slugs", () => {

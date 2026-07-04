@@ -212,15 +212,13 @@ export function makeDevinAdapter(devinSettings: DevinSettings, options?: DevinAd
             const discoveredModels = buildDevinDiscoveredModelsFromSessionSetup(
               input.sessionSetupResult,
             );
-            if (discoveredModels.length > 0) {
-              yield* (options?.onSessionModelsDiscovered?.(discoveredModels) ?? Effect.void).pipe(
-                Effect.catchCause((cause) =>
-                  Effect.logWarning("Failed to record Devin ACP session model discovery.", {
-                    cause,
-                  }),
-                ),
-              );
-            }
+            yield* (options?.onSessionModelsDiscovered?.(discoveredModels) ?? Effect.void).pipe(
+              Effect.catchCause((cause) =>
+                Effect.logWarning("Failed to record Devin ACP session model discovery.", {
+                  cause,
+                }),
+              ),
+            );
             yield* options?.afterSessionStarted?.(input) ?? Effect.void;
           }),
       },

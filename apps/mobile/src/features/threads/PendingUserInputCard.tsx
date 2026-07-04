@@ -3,12 +3,16 @@ import { Pressable, View } from "react-native";
 
 import { AppText as Text, AppTextInput as TextInput } from "../../components/AppText";
 import { cn } from "../../lib/cn";
-import type { PendingUserInput, PendingUserInputDraftAnswer } from "../../lib/threadActivity";
+import type {
+  PendingUserInput,
+  PendingUserInputAnswers,
+  PendingUserInputDraftAnswer,
+} from "../../lib/threadActivity";
 
 export interface PendingUserInputCardProps {
   readonly pendingUserInput: PendingUserInput;
   readonly drafts: Record<string, PendingUserInputDraftAnswer>;
-  readonly answers: Record<string, string> | null;
+  readonly answers: PendingUserInputAnswers | null;
   readonly respondingUserInputId: ApprovalRequestId | null;
   readonly onSelectOption: (
     requestId: ApprovalRequestId,
@@ -34,6 +38,9 @@ export function PendingUserInputCard(props: PendingUserInputCardProps) {
       </Text>
       {props.pendingUserInput.questions.map((question) => {
         const draft = props.drafts[question.id];
+        const selectedOptionLabels = Array.isArray(draft?.selectedOptionLabels)
+          ? draft.selectedOptionLabels
+          : [];
         return (
           <View key={question.id} className="gap-2 pt-1">
             <Text className="font-t3-bold text-xs uppercase tracking-[1px] text-neutral-500 dark:text-neutral-500">
@@ -45,7 +52,8 @@ export function PendingUserInputCard(props: PendingUserInputCardProps) {
             <View className="flex-row flex-wrap gap-2.5">
               {question.options.map((option) => {
                 const selected =
-                  draft?.selectedOptionLabel === option.label && !draft.customAnswer?.trim().length;
+                  selectedOptionLabels.includes(option.label) &&
+                  !draft?.customAnswer?.trim().length;
                 return (
                   <Pressable
                     key={option.label}

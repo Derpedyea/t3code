@@ -478,7 +478,14 @@ export function respondToAcpPermissionRequest(input: {
         detail: `Unknown pending approval request: ${input.requestId}`,
       });
     }
-    yield* Deferred.succeed(pending.decision, input.decision);
+    const accepted = yield* Deferred.succeed(pending.decision, input.decision);
+    if (!accepted) {
+      return yield* new ProviderAdapterRequestError({
+        provider: input.provider,
+        method: "session/request_permission",
+        detail: `Unknown pending approval request: ${input.requestId}`,
+      });
+    }
   });
 }
 
@@ -610,12 +617,22 @@ export function prepareAcpPromptContent(input: {
   readonly provider: ProviderDriverKind;
   readonly text: string | undefined;
   readonly attachments: ProviderSendTurnInput["attachments"];
+  readonly promptCapabilities?: EffectAcpSchema.PromptCapabilities | undefined;
   readonly attachmentsDir: string;
   readonly fileSystem: FileSystem.FileSystem;
 }) {
   return Effect.gen(function* () {
     const text = input.text?.trim();
-    const imagePromptParts = yield* Effect.forEach(input.attachments ?? [], (attachment) =>
+    const attachments = input.attachments ?? [];
+    if (attachments.length > 0 && input.promptCapabilities?.image !== true) {
+      return yield* new ProviderAdapterRequestError({
+        provider: input.provider,
+        method: "session/prompt",
+        detail: "ACP agent does not support image prompt attachments.",
+      });
+    }
+
+    const imagePromptParts = yield* Effect.forEach(attachments, (attachment) =>
       Effect.gen(function* () {
         const attachmentPath = resolveAttachmentPath({
           attachmentsDir: input.attachmentsDir,
