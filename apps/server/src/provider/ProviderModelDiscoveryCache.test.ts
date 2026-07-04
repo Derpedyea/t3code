@@ -25,4 +25,29 @@ describe("ProviderModelDiscoveryCache", () => {
       }),
     ),
   );
+
+  it.effect("primes models without triggering a provider refresh", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const cache = yield* makeProviderModelDiscoveryCache();
+        let refreshCount = 0;
+        const model = {
+          slug: "devin-model",
+          name: "Devin Model",
+          isCustom: false,
+          capabilities: null,
+        } satisfies ServerProviderModel;
+
+        yield* cache.setRefresh(
+          Effect.sync(() => {
+            refreshCount += 1;
+          }),
+        );
+        yield* cache.primeModels([model]);
+
+        expect(yield* cache.getModels).toEqual([model]);
+        expect(refreshCount).toBe(0);
+      }),
+    ),
+  );
 });

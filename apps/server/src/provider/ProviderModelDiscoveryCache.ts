@@ -8,6 +8,9 @@ export interface ProviderModelDiscoveryCache {
   readonly setRefresh: (
     refresh: Effect.Effect<unknown, never, never>,
   ) => Effect.Effect<void, never, never>;
+  readonly primeModels: (
+    models: ReadonlyArray<ServerProviderModel>,
+  ) => Effect.Effect<void, never, never>;
   readonly recordModels: (
     models: ReadonlyArray<ServerProviderModel>,
   ) => Effect.Effect<void, never, never>;
@@ -31,6 +34,7 @@ export function makeProviderModelDiscoveryCache(): Effect.Effect<
     return {
       getModels: Ref.get(modelsRef),
       setRefresh: (refresh) => Ref.set(refreshRef, refresh),
+      primeModels: (models) => Ref.set(modelsRef, models),
       recordModels: (models) =>
         Ref.set(modelsRef, models).pipe(Effect.andThen(scheduleRefresh), Effect.asVoid),
     } satisfies ProviderModelDiscoveryCache;

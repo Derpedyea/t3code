@@ -4,6 +4,7 @@ import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
+import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import { HttpClient } from "effect/unstable/http";
 import { ChildProcessSpawner } from "effect/unstable/process";
@@ -39,7 +40,10 @@ import {
   makeProviderSnapshotSettingsSource,
   type ProviderSnapshotSettings,
 } from "../providerUpdateSettings.ts";
-import { isDevinAcpModelCoveredByBaseModelIds } from "../acp/DevinAcpSupport.ts";
+import {
+  discoverDevinModelsViaAcp,
+  isDevinAcpModelCoveredByBaseModelIds,
+} from "../acp/DevinAcpSupport.ts";
 
 const decodeDevinSettings = Schema.decodeSync(DevinSettings);
 
@@ -122,6 +126,7 @@ export const DevinDriver: ProviderDriver<DevinSettings, DevinDriverEnv> = {
         env: processEnv,
       });
       const modelDiscoveryCache = yield* makeProviderModelDiscoveryCache();
+      const initialModelDiscoveryAttempted = yield* Ref.make(false);
 
       const adapter = yield* makeDevinAdapter(effectiveConfig, {
         environment: processEnv,
@@ -130,10 +135,23 @@ export const DevinDriver: ProviderDriver<DevinSettings, DevinDriverEnv> = {
         onSessionModelsDiscovered: modelDiscoveryCache.recordModels,
       });
       const textGeneration = yield* makeDevinTextGeneration(effectiveConfig, processEnv);
+      const discoverInitialModels = Effect.fn("DevinDriver.discoverInitialModels")(function* () {
+        const alreadyAttempted = yield* Ref.getAndSet(initialModelDiscoveryAttempted, true);
+        if (alreadyAttempted) {
+          return [];
+        }
+
+        const discoveredModels = yield* discoverDevinModelsViaAcp(effectiveConfig, processEnv);
+        yield* modelDiscoveryCache.primeModels(discoveredModels);
+        return discoveredModels;
+      });
 
       const checkProvider = modelDiscoveryCache.getModels.pipe(
         Effect.flatMap((cachedDiscoveredModels) =>
-          checkDevinProviderStatus(effectiveConfig, processEnv, { cachedDiscoveredModels }),
+          checkDevinProviderStatus(effectiveConfig, processEnv, {
+            cachedDiscoveredModels,
+            discoverModels: discoverInitialModels(),
+          }),
         ),
         Effect.map(stampIdentity),
         Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),

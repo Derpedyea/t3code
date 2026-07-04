@@ -196,6 +196,41 @@ it.layer(NodeServices.layer)("checkDevinProviderStatus", (it) => {
     }),
   );
 
+  it.effect("reports models discovered by a supplied cold-start ACP probe", () =>
+    Effect.gen(function* () {
+      const snapshot = yield* Effect.scoped(
+        Effect.gen(function* () {
+          const devinPath = yield* makeMockDevinCli("t3code-devin-cold-discovery-");
+
+          return yield* checkDevinProviderStatus(
+            decodeDevinSettings({ enabled: true, binaryPath: devinPath }),
+            process.env,
+            {
+              discoverModels: Effect.succeed([
+                {
+                  slug: "adaptive",
+                  name: "Adaptive",
+                  isCustom: false,
+                  capabilities: null,
+                },
+                {
+                  slug: "gpt-5-5",
+                  name: "GPT-5.5",
+                  isCustom: false,
+                  capabilities: null,
+                },
+              ]),
+            },
+          );
+        }),
+      );
+
+      expect(snapshot.status).toBe("ready");
+      expect(snapshot.models.map((model) => model.slug)).toEqual(["adaptive", "gpt-5-5"]);
+      expect(snapshot.message).toBeUndefined();
+    }),
+  );
+
   it.effect("uses cached real-session model discovery without ACP probing", () =>
     Effect.gen(function* () {
       const snapshot = yield* Effect.scoped(

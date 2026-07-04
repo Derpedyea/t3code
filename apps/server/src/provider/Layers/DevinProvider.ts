@@ -8,10 +8,12 @@ import {
 import { causeErrorTag } from "@t3tools/shared/observability";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as Option from "effect/Option";
 import * as Result from "effect/Result";
 import { HttpClient } from "effect/unstable/http";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
+import type * as EffectAcpErrors from "effect-acp/errors";
 import { createModelCapabilities } from "@t3tools/shared/model";
 import { resolveSpawnCommand } from "@t3tools/shared/shell";
 
@@ -40,6 +42,7 @@ const EMPTY_CAPABILITIES: ModelCapabilities = createModelCapabilities({
 });
 
 const VERSION_PROBE_TIMEOUT_MS = 4_000;
+const DEVIN_ACP_INITIAL_MODEL_DISCOVERY_TIMEOUT_MS = 15_000;
 
 export function buildInitialDevinProviderSnapshot(
   devinSettings: DevinSettings,
@@ -112,6 +115,11 @@ const runDevinVersionCommand = (
 
 export interface DevinProviderStatusOptions {
   readonly cachedDiscoveredModels?: ReadonlyArray<ServerProviderModel>;
+  readonly discoverModels?: Effect.Effect<
+    ReadonlyArray<ServerProviderModel>,
+    EffectAcpErrors.AcpError,
+    ChildProcessSpawner.ChildProcessSpawner
+  >;
 }
 
 export const checkDevinProviderStatus = Effect.fn("checkDevinProviderStatus")(function* (
@@ -122,6 +130,36 @@ export const checkDevinProviderStatus = Effect.fn("checkDevinProviderStatus")(fu
   const checkedAt = DateTime.formatIso(yield* DateTime.now);
   const cachedModels = options?.cachedDiscoveredModels ?? [];
   const fallbackModels = devinModelsFromSettings(devinSettings.customModels, cachedModels);
+
+  const discoverModelsForSnapshot = Effect.fn("discoverDevinModelsForSnapshot")(function* () {
+    if (cachedModels.length > 0 || options?.discoverModels === undefined) {
+      return cachedModels;
+    }
+
+    const discoveryExit = yield* options.discoverModels.pipe(
+      Effect.timeoutOption(DEVIN_ACP_INITIAL_MODEL_DISCOVERY_TIMEOUT_MS),
+      Effect.exit,
+    );
+    if (Exit.isFailure(discoveryExit)) {
+      yield* Effect.logWarning("Devin cold-start ACP model discovery failed", {
+        errorTag: causeErrorTag(discoveryExit.cause),
+      });
+      return cachedModels;
+    }
+    if (Option.isNone(discoveryExit.value)) {
+      yield* Effect.logWarning(
+        `Devin cold-start ACP model discovery timed out after ${DEVIN_ACP_INITIAL_MODEL_DISCOVERY_TIMEOUT_MS}ms.`,
+      );
+      return cachedModels;
+    }
+
+    const discoveredModels = discoveryExit.value.value;
+    if (discoveredModels.length === 0) {
+      yield* Effect.logWarning("Devin cold-start ACP model discovery returned no models.");
+      return cachedModels;
+    }
+    return discoveredModels;
+  });
 
   if (!devinSettings.enabled) {
     return buildServerProvider({
@@ -205,13 +243,17 @@ export const checkDevinProviderStatus = Effect.fn("checkDevinProviderStatus")(fu
     });
   }
 
-  // Provider refreshes run periodically. Devin ACP startup creates a real
-  // session, so model details are captured only from user-started sessions.
+  // Provider refreshes run periodically. The driver supplies cold-start
+  // discovery as a one-shot effect so we seed the model picker without creating
+  // a real Devin session on every refresh.
+  const discoveredModels = yield* discoverModelsForSnapshot();
+  const models = devinModelsFromSettings(devinSettings.customModels, discoveredModels);
+
   return buildServerProvider({
     presentation: DEVIN_PRESENTATION,
     enabled: devinSettings.enabled,
     checkedAt,
-    models: fallbackModels,
+    models,
     probe: {
       installed: true,
       version,
