@@ -7,12 +7,16 @@ import {
   ApprovalRequestId,
   ProviderDriverKind,
   type ProviderApprovalDecision,
+  type ProviderUserInputAnswers,
 } from "@t3tools/contracts";
 
 import {
+  type AcpAdapterPendingUserInputResolution,
   makeAcpThreadLock,
   respondToAcpPermissionRequest,
+  respondToAcpUserInput,
   selectPermissionOptionId,
+  settlePendingAcpUserInputsAsCancelled,
 } from "./AcpAdapterRuntime.ts";
 
 describe("AcpAdapterRuntime", () => {
@@ -72,6 +76,36 @@ describe("AcpAdapterRuntime", () => {
 
       expect(error._tag).toBe("ProviderAdapterRequestError");
       expect(error.detail).toContain("Unknown pending approval request");
+    }),
+  );
+
+  it.effect("rejects stale ACP user-input responses after cancellation", () =>
+    Effect.gen(function* () {
+      const requestId = ApprovalRequestId.make("user-input-1");
+      const resolution = yield* Deferred.make<AcpAdapterPendingUserInputResolution<string>>();
+      const pendingUserInputs = new Map([
+        [
+          requestId,
+          {
+            resolution,
+            makeResponse: (answers: ProviderUserInputAnswers) => String(answers["scope"]),
+          },
+        ],
+      ]);
+
+      yield* settlePendingAcpUserInputsAsCancelled(pendingUserInputs);
+      const error = yield* Effect.flip(
+        respondToAcpUserInput({
+          provider: ProviderDriverKind.make("devin"),
+          method: "session/elicitation",
+          requestId,
+          answers: { scope: "Workspace" },
+          pendingUserInputs,
+        }),
+      );
+
+      expect(error._tag).toBe("ProviderAdapterRequestError");
+      expect(error.detail).toContain("no longer awaiting a response");
     }),
   );
 });

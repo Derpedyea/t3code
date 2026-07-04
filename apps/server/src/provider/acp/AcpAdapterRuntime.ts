@@ -605,11 +605,18 @@ export function respondToAcpUserInput<Response>(input: {
         detail: validationError,
       });
     }
-    yield* Deferred.succeed(pending.resolution, {
+    const accepted = yield* Deferred.succeed(pending.resolution, {
       _tag: "answered",
       answers: input.answers,
       response,
     });
+    if (!accepted) {
+      return yield* new ProviderAdapterRequestError({
+        provider: input.provider,
+        method: input.method,
+        detail: `Pending user-input request is no longer awaiting a response: ${input.requestId}`,
+      });
+    }
   });
 }
 
