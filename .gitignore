@@ -32,3 +32,10 @@ node_modules/
 *.log
 .env*
 !.env.example
+
+# Local agent/MCP harness artifacts (not part of the app)
+.firecrawl/
+/agent-tools/
+/mcps/
+/terminals/
+/apps/server/mcps/

@@ -79,6 +79,33 @@ describe("makeDevinElicitationPrompt", () => {
     });
   });
 
+  it("declines required multi-select answers when any selected value is invalid", () => {
+    const prompt = makeDevinElicitationPrompt({
+      mode: "form",
+      sessionId: "session-1",
+      message: "Choose permissions",
+      requestedSchema: {
+        type: "object",
+        title: "Permissions",
+        properties: {
+          permissions: {
+            type: "array",
+            title: "Permissions",
+            items: { type: "string", enum: ["read", "write"] },
+          },
+        },
+        required: ["permissions"],
+      },
+    });
+
+    expect(prompt.makeResponse({ permissions: ["read", "write"] })).toEqual({
+      action: { action: "accept", content: { permissions: ["read", "write"] } },
+    });
+    expect(prompt.makeResponse({ permissions: ["read", "admin"] })).toEqual({
+      action: { action: "decline" },
+    });
+  });
+
   it("marks optional form questions and omits unanswered optional values", () => {
     const prompt = makeDevinElicitationPrompt({
       mode: "form",

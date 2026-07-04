@@ -236,6 +236,12 @@ describe("readEnvironmentFromWindowsShell", () => {
       expect.arrayContaining(["-NoLogo", "-NoProfile", "-NonInteractive", "-Command"]),
       { encoding: "utf8", timeout: 5000 },
     );
+    const command = execFile.mock.calls[0]?.[1]?.at(-1);
+    expect(command).toContain("[Environment]::GetEnvironmentVariable('Path', 'Process')");
+    expect(command).toContain("[Environment]::GetEnvironmentVariable('Path', 'Machine')");
+    expect(command).toContain("[Environment]::GetEnvironmentVariable('Path', 'User')");
+    expect(command).toContain(") | Where-Object { $null -ne $_ -and $_.Length -gt 0 }");
+    expect(command).not.toContain("Where-Object { $null -ne $_ -and $_.Length -gt 0 })");
   });
 
   it("strips CRLF delimiters from captured PowerShell values", () => {

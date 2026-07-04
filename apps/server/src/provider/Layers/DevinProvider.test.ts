@@ -12,26 +12,14 @@ import { buildDevinDiscoveredModelsFromSessionSetup } from "../acp/DevinAcpSuppo
 import { checkDevinProviderStatus } from "./DevinProvider.ts";
 
 const decodeDevinSettings = Schema.decodeSync(DevinSettings);
-const mockAgentUrl = new URL("../../../scripts/acp-mock-agent.ts", import.meta.url);
 
-function quotePosixShell(value: string): string {
-  return `'${value.replaceAll("'", "'\\''")}'`;
-}
-
-const makeMockDevinCli = Effect.fn("makeMockDevinCli")(function* (
-  prefix: string,
-  options?: {
-    readonly acp?: boolean;
-  },
-) {
+const makeMockDevinCli = Effect.fn("makeMockDevinCli")(function* (prefix: string) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const hostPlatform = yield* HostProcessPlatform;
   const isWin32 = hostPlatform === "win32";
   const dir = yield* fs.makeTempDirectoryScoped({ prefix });
   const devinPath = path.join(dir, isWin32 ? "devin.cmd" : "devin");
-  const mockAgentPath = yield* path.fromFileUrl(mockAgentUrl);
-  const supportsAcp = options?.acp ?? true;
 
   yield* fs.writeFileString(
     devinPath,
@@ -42,14 +30,6 @@ const makeMockDevinCli = Effect.fn("makeMockDevinCli")(function* (
           "  echo devin 1.2.3",
           "  exit /b 0",
           ")",
-          ...(supportsAcp
-            ? [
-                'if "%~1"=="acp" (',
-                `  "${process.execPath}" "${mockAgentPath}"`,
-                "  exit /b %ERRORLEVEL%",
-                ")",
-              ]
-            : []),
           "echo unexpected Devin invocation: %* 1>&2",
           "exit /b 7",
           "",
@@ -60,13 +40,6 @@ const makeMockDevinCli = Effect.fn("makeMockDevinCli")(function* (
           '  printf "devin 1.2.3\\n"',
           "  exit 0",
           "fi",
-          ...(supportsAcp
-            ? [
-                'if [ "$1" = "acp" ]; then',
-                `  exec ${quotePosixShell(process.execPath)} ${quotePosixShell(mockAgentPath)}`,
-                "fi",
-              ]
-            : []),
           'printf "unexpected Devin invocation: %s\\n" "$*" >&2',
           "exit 7",
           "",
@@ -203,7 +176,7 @@ describe("buildDevinDiscoveredModelsFromSessionSetup", () => {
 });
 
 it.layer(NodeServices.layer)("checkDevinProviderStatus", (it) => {
-  it.effect("reports models discovered through Devin ACP after `devin version` succeeds", () =>
+  it.effect("reports ready without starting an ACP probe after `devin version` succeeds", () =>
     Effect.gen(function* () {
       const snapshot = yield* Effect.scoped(
         Effect.gen(function* () {
@@ -219,19 +192,15 @@ it.layer(NodeServices.layer)("checkDevinProviderStatus", (it) => {
       expect(snapshot.installed).toBe(true);
       expect(snapshot.version).toBe("1.2.3");
       expect(snapshot.message).toBeUndefined();
-      expect(snapshot.models.map((model) => model.slug)).toEqual([
-        "auto",
-        "composer-2",
-        "codex-5-3",
-      ]);
+      expect(snapshot.models.map((model) => model.slug)).toEqual([]);
     }),
   );
 
-  it.effect("uses cached real-session model discovery when ACP probing fails", () =>
+  it.effect("uses cached real-session model discovery without ACP probing", () =>
     Effect.gen(function* () {
       const snapshot = yield* Effect.scoped(
         Effect.gen(function* () {
-          const devinPath = yield* makeMockDevinCli("t3code-devin-cached-", { acp: false });
+          const devinPath = yield* makeMockDevinCli("t3code-devin-cached-");
 
           return yield* checkDevinProviderStatus(
             decodeDevinSettings({ enabled: true, binaryPath: devinPath }),
@@ -256,9 +225,9 @@ it.layer(NodeServices.layer)("checkDevinProviderStatus", (it) => {
         }),
       );
 
-      expect(snapshot.status).toBe("warning");
+      expect(snapshot.status).toBe("ready");
       expect(snapshot.models.map((model) => model.slug)).toEqual(["adaptive", "gpt-5-5"]);
-      expect(snapshot.message).toContain("last models discovered");
+      expect(snapshot.message).toBeUndefined();
     }),
   );
 });

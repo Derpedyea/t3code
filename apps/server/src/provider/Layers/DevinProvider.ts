@@ -8,7 +8,6 @@ import {
 import { causeErrorTag } from "@t3tools/shared/observability";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
-import * as Exit from "effect/Exit";
 import * as Option from "effect/Option";
 import * as Result from "effect/Result";
 import { HttpClient } from "effect/unstable/http";
@@ -28,7 +27,6 @@ import {
   enrichProviderSnapshotWithVersionAdvisory,
   type ProviderMaintenanceCapabilities,
 } from "../providerMaintenance.ts";
-import { discoverDevinModelsViaAcp } from "../acp/DevinAcpSupport.ts";
 
 const DEVIN_PRESENTATION = {
   displayName: "Devin",
@@ -42,7 +40,6 @@ const EMPTY_CAPABILITIES: ModelCapabilities = createModelCapabilities({
 });
 
 const VERSION_PROBE_TIMEOUT_MS = 4_000;
-const DEVIN_ACP_MODEL_DISCOVERY_TIMEOUT_MS = 15_000;
 
 export function buildInitialDevinProviderSnapshot(
   devinSettings: DevinSettings,
@@ -208,56 +205,13 @@ export const checkDevinProviderStatus = Effect.fn("checkDevinProviderStatus")(fu
     });
   }
 
-  const buildDiscoveryFailureSnapshot = (message: string) =>
-    buildServerProvider({
-      presentation: DEVIN_PRESENTATION,
-      enabled: devinSettings.enabled,
-      checkedAt,
-      models: fallbackModels,
-      probe: {
-        installed: true,
-        version,
-        status: cachedModels.length > 0 ? "warning" : "error",
-        auth: { status: "unknown" },
-        message:
-          cachedModels.length > 0
-            ? `${message} Showing the last models discovered from a Devin ACP session.`
-            : message,
-      },
-    });
-
-  const discoveryExit = yield* discoverDevinModelsViaAcp(devinSettings, environment).pipe(
-    Effect.timeoutOption(DEVIN_ACP_MODEL_DISCOVERY_TIMEOUT_MS),
-    Effect.exit,
-  );
-  if (Exit.isFailure(discoveryExit)) {
-    yield* Effect.logWarning("Devin ACP model discovery failed", {
-      errorTag: causeErrorTag(discoveryExit.cause),
-    });
-    return buildDiscoveryFailureSnapshot(
-      "Devin CLI is installed but ACP model discovery failed. Run `devin auth login`, then try again.",
-    );
-  }
-  if (Option.isNone(discoveryExit.value)) {
-    yield* Effect.logWarning(
-      `Devin ACP model discovery timed out after ${DEVIN_ACP_MODEL_DISCOVERY_TIMEOUT_MS}ms.`,
-    );
-    return buildDiscoveryFailureSnapshot(
-      `Devin CLI is installed but ACP model discovery timed out after ${DEVIN_ACP_MODEL_DISCOVERY_TIMEOUT_MS}ms.`,
-    );
-  }
-
-  const discoveredModels = discoveryExit.value.value;
-  if (discoveredModels.length === 0) {
-    return buildDiscoveryFailureSnapshot("Devin ACP model discovery returned no built-in models.");
-  }
-  const models = devinModelsFromSettings(devinSettings.customModels, discoveredModels);
-
+  // Provider refreshes run periodically. Devin ACP startup creates a real
+  // session, so model details are captured only from user-started sessions.
   return buildServerProvider({
     presentation: DEVIN_PRESENTATION,
     enabled: devinSettings.enabled,
     checkedAt,
-    models,
+    models: fallbackModels,
     probe: {
       installed: true,
       version,

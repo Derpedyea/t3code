@@ -1,7 +1,9 @@
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
+import * as Stream from "effect/Stream";
 import type * as Scope from "effect/Scope";
 import type * as EffectAcpErrors from "effect-acp/errors";
 import type * as EffectAcpSchema from "effect-acp/schema";
@@ -82,17 +84,16 @@ export function makeAcpJsonTextGeneration(
       const outputRef = yield* Ref.make("");
       const runtime = yield* options.makeRuntime(cwd);
 
-      yield* runtime.handleSessionUpdate((notification) => {
-        const update = notification.update;
-        if (update.sessionUpdate !== "agent_message_chunk") {
+      yield* Stream.runForEach(runtime.getEvents(), (event) => {
+        if (event._tag === "EventStreamBarrier") {
+          return Deferred.succeed(event.acknowledge, undefined).pipe(Effect.asVoid);
+        }
+        if (event._tag !== "ContentDelta") {
           return Effect.void;
         }
-        const content = update.content;
-        if (content.type !== "text") {
-          return Effect.void;
-        }
-        return Ref.update(outputRef, (current) => current + content.text);
-      });
+        return Ref.update(outputRef, (current) => current + event.text);
+      }).pipe(Effect.forkScoped);
+
       // Headless runs cannot answer interactive requests; cancel them so the
       // agent terminates deterministically instead of waiting forever.
       yield* runtime.handleElicitation(() =>
@@ -136,6 +137,8 @@ export function makeAcpJsonTextGeneration(
               }),
         ),
       );
+
+      yield* runtime.drainEvents;
 
       if (promptResult.stopReason === "cancelled") {
         return yield* new TextGenerationError({

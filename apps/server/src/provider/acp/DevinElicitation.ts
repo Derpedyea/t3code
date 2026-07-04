@@ -137,10 +137,14 @@ function normalizeStringArrayAnswer(
   if (allowedValues.size === 0) {
     return values;
   }
-  const normalized = values.flatMap((value) => {
+  const normalized: Array<string> = [];
+  for (const value of values) {
     const resolved = resolveChoiceValue(value, valuesByLabel, allowedValues);
-    return resolved ? [resolved] : [];
-  });
+    if (!resolved) {
+      return undefined;
+    }
+    normalized.push(resolved);
+  }
   return normalized.length > 0 ? normalized : undefined;
 }
 

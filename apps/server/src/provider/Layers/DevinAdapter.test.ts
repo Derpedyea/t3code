@@ -514,6 +514,40 @@ it.layer(devinAdapterTestLayer)("DevinAdapterLive", (it) => {
     }),
   );
 
+  it.effect("ignores stale explicit turn interrupts after completion", () =>
+    Effect.gen(function* () {
+      const threadId = ThreadId.make("devin-ignore-stale-turn-interrupt");
+      const tempDir = yield* Effect.promise(() =>
+        NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "devin-stale-interrupt-")),
+      );
+      const requestLogPath = NodePath.join(tempDir, "requests.ndjson");
+      const wrapperPath = yield* Effect.promise(() =>
+        makeMockDevinWrapper({
+          T3_ACP_REQUEST_LOG_PATH: requestLogPath,
+        }),
+      );
+      const adapter = yield* makeTestAdapter(wrapperPath);
+
+      yield* adapter.startSession({
+        threadId,
+        provider: ProviderDriverKind.make("devin"),
+        cwd: process.cwd(),
+        runtimeMode: "full-access",
+      });
+      const completed = yield* adapter
+        .sendTurn({ threadId, input: "complete before interrupt", attachments: [] })
+        .pipe(Effect.timeout("2 seconds"));
+
+      yield* adapter.interruptTurn(threadId, completed.turnId).pipe(Effect.timeout("2 seconds"));
+      yield* Effect.sleep("100 millis");
+
+      const requests = yield* Effect.promise(() => readJsonLines(requestLogPath));
+      assert.isFalse(requests.some((entry) => entry.method === "session/cancel"));
+
+      yield* adapter.stopSession(threadId);
+    }).pipe(TestClock.withLive),
+  );
+
   it.effect("restores ready without completing an unstarted turn when preparation fails", () =>
     Effect.gen(function* () {
       const threadId = ThreadId.make("devin-preparation-failure-while-connecting");

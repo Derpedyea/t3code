@@ -268,9 +268,21 @@ function buildWindowsEnvironmentCaptureCommand(names: ReadonlyArray<string>): st
         throw new Error(`Unsupported environment variable name: ${name}`);
       }
 
+      const valueCapture =
+        name.toUpperCase() === "PATH"
+          ? [
+              "$parts = @(",
+              "  [Environment]::GetEnvironmentVariable('Path', 'Process'),",
+              "  [Environment]::GetEnvironmentVariable('Path', 'Machine'),",
+              "  [Environment]::GetEnvironmentVariable('Path', 'User')",
+              ") | Where-Object { $null -ne $_ -and $_.Length -gt 0 }",
+              "$value = [string]::Join(';', $parts)",
+            ]
+          : [`$value = [Environment]::GetEnvironmentVariable('${name}')`];
+
       return [
         `Write-Output '${envCaptureStart(name)}'`,
-        `$value = [Environment]::GetEnvironmentVariable('${name}')`,
+        ...valueCapture,
         "if ($null -ne $value -and $value.Length -gt 0) { Write-Output $value }",
         `Write-Output '${envCaptureEnd(name)}'`,
       ];
