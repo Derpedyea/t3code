@@ -21,6 +21,7 @@ jobs:
       UPSTREAM_REPOSITORY: pingdotgg/t3code
       UPSTREAM_BRANCH: main
       TARGET_BRANCH: main
+      OPENROUTER_MERGE_MODEL: ${{ vars.OPENROUTER_MERGE_MODEL || 'poolside/laguna-xs-2.1:free' }}
       CODEX_MERGE_MODEL: ${{ vars.CODEX_MERGE_MODEL || 'gpt-5.5' }}
       CODEX_MERGE_REASONING_EFFORT: ${{ vars.CODEX_MERGE_REASONING_EFFORT || 'medium' }}
     steps:
@@ -79,6 +80,7 @@ jobs:
         shell: bash
         env:
           CODEX_HOME: ${{ runner.temp }}/codex-home
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           CODEX_AUTH_JSON_B64: ${{ secrets.CODEX_AUTH_JSON_B64 }}
           CODEX_ACCESS_TOKEN: ${{ secrets.CODEX_ACCESS_TOKEN }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
@@ -90,24 +92,47 @@ jobs:
           cli_auth_credentials_store = "file"
           TOML
 
+          if [ -n "${OPENROUTER_API_KEY}" ]; then
+            cat >> "${CODEX_HOME}/config.toml" <<'TOML'
+          model_provider = "openrouter"
+
+          [model_providers.openrouter]
+          name = "OpenRouter"
+          base_url = "https://openrouter.ai/api/v1"
+          env_key = "OPENROUTER_API_KEY"
+          wire_api = "responses"
+          http_headers = { "HTTP-Referer" = "https://github.com/Derpedyea/t3code", "X-Title" = "Derpedyea/t3code upstream sync" }
+          TOML
+            echo "auth_mode=openrouter" >> "${GITHUB_OUTPUT}"
+            echo "model_provider=openrouter" >> "${GITHUB_OUTPUT}"
+            echo "repair_model=${OPENROUTER_MERGE_MODEL}" >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+
           if [ -n "${CODEX_AUTH_JSON_B64}" ]; then
             printf '%s' "${CODEX_AUTH_JSON_B64}" | base64 -d > "${CODEX_HOME}/auth.json"
             chmod 600 "${CODEX_HOME}/auth.json"
             echo "auth_mode=chatgpt" >> "${GITHUB_OUTPUT}"
+            echo "model_provider=openai" >> "${GITHUB_OUTPUT}"
+            echo "repair_model=${CODEX_MERGE_MODEL}" >> "${GITHUB_OUTPUT}"
             exit 0
           fi
 
           if [ -n "${CODEX_ACCESS_TOKEN}" ]; then
             echo "auth_mode=chatgpt" >> "${GITHUB_OUTPUT}"
+            echo "model_provider=openai" >> "${GITHUB_OUTPUT}"
+            echo "repair_model=${CODEX_MERGE_MODEL}" >> "${GITHUB_OUTPUT}"
             exit 0
           fi
 
           if [ -n "${OPENAI_API_KEY}" ]; then
             echo "auth_mode=api" >> "${GITHUB_OUTPUT}"
+            echo "model_provider=openai" >> "${GITHUB_OUTPUT}"
+            echo "repair_model=${CODEX_MERGE_MODEL}" >> "${GITHUB_OUTPUT}"
             exit 0
           fi
 
-          echo "::error::Merge conflicts require Codex repair, but no Codex credential is configured. CODEX_AUTH_JSON_B64 or CODEX_ACCESS_TOKEN uses ChatGPT-backed Codex on trusted runners; OPENAI_API_KEY is the recommended CI fallback."
+          echo "::error::Merge conflicts require Codex repair, but no Codex credential is configured. OPENROUTER_API_KEY uses the lightweight OpenRouter repair path; CODEX_AUTH_JSON_B64 or CODEX_ACCESS_TOKEN uses ChatGPT-backed Codex on trusted runners; OPENAI_API_KEY is the OpenAI API fallback."
           exit 1
 
       - name: Repair merge conflicts with Codex
@@ -115,17 +140,28 @@ jobs:
         shell: bash
         env:
           CODEX_HOME: ${{ runner.temp }}/codex-home
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           CODEX_ACCESS_TOKEN: ${{ secrets.CODEX_ACCESS_TOKEN }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           CODEX_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         run: |
           set -euo pipefail
 
-          npx -y @openai/codex@latest exec \
-            --model "${CODEX_MERGE_MODEL}" \
-            -c "model_reasoning_effort=\"${CODEX_MERGE_REASONING_EFFORT}\"" \
-            --sandbox workspace-write \
-            --ask-for-approval never \
-            --cd "${GITHUB_WORKSPACE}" \
+          REPAIR_MODEL="${{ steps.codex_auth.outputs.repair_model }}"
+          MODEL_PROVIDER="${{ steps.codex_auth.outputs.model_provider }}"
+
+          codex_args=(
+            --model "${REPAIR_MODEL}"
+            --sandbox workspace-write
+            --ask-for-approval never
+            --cd "${GITHUB_WORKSPACE}"
+          )
+
+          if [ "${MODEL_PROVIDER}" != "openrouter" ]; then
+            codex_args+=(-c "model_reasoning_effort=\"${CODEX_MERGE_REASONING_EFFORT}\"")
+          fi
+
+          npx -y @openai/codex@latest exec "${codex_args[@]}" \
             "A merge from upstream/${UPSTREAM_BRANCH} into ${TARGET_BRANCH} has conflicts. Resolve only the merge conflicts in this repository, preserving both upstream and fork behavior where possible. Do not make unrelated refactors, do not commit, and do not push. Leave the repository ready for 'git commit --no-edit'. Run 'git status --short' and 'git diff --check' before finishing."
 
       - name: Finalize Codex conflict repair
