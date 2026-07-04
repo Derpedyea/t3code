@@ -23,7 +23,6 @@ jobs:
       TARGET_BRANCH: main
       CODEX_MERGE_MODEL: ${{ vars.CODEX_MERGE_MODEL || 'gpt-5.5' }}
       CODEX_MERGE_REASONING_EFFORT: ${{ vars.CODEX_MERGE_REASONING_EFFORT || 'medium' }}
-      CODEX_HOME: ${{ runner.temp }}/codex-home
     steps:
       - name: Checkout fork main
         uses: actions/checkout@v4
@@ -79,6 +78,7 @@ jobs:
         if: steps.merge.outputs.conflict == 'true'
         shell: bash
         env:
+          CODEX_HOME: ${{ runner.temp }}/codex-home
           CODEX_AUTH_JSON_B64: ${{ secrets.CODEX_AUTH_JSON_B64 }}
           CODEX_ACCESS_TOKEN: ${{ secrets.CODEX_ACCESS_TOKEN }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
@@ -114,6 +114,7 @@ jobs:
         if: steps.merge.outputs.conflict == 'true'
         shell: bash
         env:
+          CODEX_HOME: ${{ runner.temp }}/codex-home
           CODEX_ACCESS_TOKEN: ${{ secrets.CODEX_ACCESS_TOKEN }}
           CODEX_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         run: |
