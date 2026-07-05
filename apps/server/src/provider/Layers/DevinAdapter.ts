@@ -28,8 +28,12 @@ import {
   resolveDevinAcpModelSelection,
 } from "../acp/DevinAcpSupport.ts";
 import {
+  extractDevinPlanMarkdown,
+  extractDevinPlanUpdate,
   makeDevinAskQuestionPrompt,
   methodLooksLikeDevinAskQuestion,
+  methodLooksLikeDevinCreatePlan,
+  methodLooksLikeDevinUpdateTodos,
   type DevinAskQuestionResponse,
 } from "../acp/DevinAcpExtension.ts";
 import { makeDevinElicitationPrompt } from "../acp/DevinElicitation.ts";
@@ -158,6 +162,27 @@ export function makeDevinAdapter(devinSettings: DevinSettings, options?: DevinAd
               }),
             );
             yield* input.acp.handleUnknownExtRequest((method, params) => {
+              if (methodLooksLikeDevinCreatePlan(method)) {
+                return input.mapAcpCallbackFailure(
+                  Effect.gen(function* () {
+                    yield* input.logNative(input.threadId, method, params);
+                    yield* input.offerRuntimeEvent({
+                      type: "turn.proposed.completed",
+                      ...(yield* input.makeEventStamp()),
+                      provider: PROVIDER,
+                      threadId: input.threadId,
+                      turnId: input.resolveActiveTurnId(),
+                      payload: { planMarkdown: extractDevinPlanMarkdown(params) },
+                      raw: {
+                        source: "acp.devin.extension",
+                        method,
+                        payload: params,
+                      },
+                    });
+                    return { accepted: true } as const;
+                  }),
+                );
+              }
               if (!methodLooksLikeDevinAskQuestion(method)) {
                 return Effect.fail(EffectAcpErrors.AcpRequestError.methodNotFound(method));
               }
@@ -189,6 +214,29 @@ export function makeDevinAdapter(devinSettings: DevinSettings, options?: DevinAd
                   makeEventStamp: input.makeEventStamp,
                   offerRuntimeEvent: input.offerRuntimeEvent,
                   logNative: input.logNative,
+                }),
+              );
+            });
+            yield* input.acp.handleUnknownExtNotification((method, params) => {
+              if (!methodLooksLikeDevinUpdateTodos(method)) {
+                return Effect.void;
+              }
+              return input.mapAcpCallbackFailure(
+                Effect.gen(function* () {
+                  yield* input.logNative(input.threadId, method, params);
+                  yield* input.offerRuntimeEvent({
+                    type: "turn.plan.updated",
+                    ...(yield* input.makeEventStamp()),
+                    provider: PROVIDER,
+                    threadId: input.threadId,
+                    turnId: input.resolveActiveTurnId(),
+                    payload: extractDevinPlanUpdate(params),
+                    raw: {
+                      source: "acp.devin.extension",
+                      method,
+                      payload: params,
+                    },
+                  });
                 }),
               );
             });

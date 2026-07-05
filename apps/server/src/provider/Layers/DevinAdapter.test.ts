@@ -361,6 +361,99 @@ it.layer(devinAdapterTestLayer)("DevinAdapterLive", (it) => {
     }),
   );
 
+  it.effect("handles Devin create-plan extension requests", () =>
+    Effect.gen(function* () {
+      const threadId = ThreadId.make("devin-create-plan-extension");
+      const wrapperPath = yield* Effect.promise(() =>
+        makeMockDevinWrapper({
+          T3_ACP_EMIT_DEVIN_CREATE_PLAN: "1",
+        }),
+      );
+      const adapter = yield* makeTestAdapter(wrapperPath);
+      const proposed =
+        yield* Deferred.make<Extract<ProviderRuntimeEvent, { type: "turn.proposed.completed" }>>();
+
+      const eventsFiber = yield* Stream.runForEach(adapter.streamEvents, (event) => {
+        if (String(event.threadId) !== String(threadId)) {
+          return Effect.void;
+        }
+        return event.type === "turn.proposed.completed"
+          ? Deferred.succeed(proposed, event).pipe(Effect.ignore)
+          : Effect.void;
+      }).pipe(Effect.forkChild);
+
+      yield* adapter.startSession({
+        threadId,
+        provider: ProviderDriverKind.make("devin"),
+        cwd: process.cwd(),
+        runtimeMode: "full-access",
+      });
+
+      const sendTurnFiber = yield* adapter
+        .sendTurn({ threadId, input: "propose a plan", attachments: [] })
+        .pipe(Effect.forkChild);
+
+      const proposedEvent = yield* Deferred.await(proposed);
+      assert.equal(proposedEvent.raw?.method, "devin/create_plan");
+      assert.include(proposedEvent.payload.planMarkdown, "# Devin plan");
+      assert.include(proposedEvent.payload.planMarkdown, "Inspect Devin ACP callbacks");
+      assert.isDefined(proposedEvent.turnId);
+      yield* Fiber.join(sendTurnFiber);
+
+      yield* Fiber.interrupt(eventsFiber);
+      yield* adapter.stopSession(threadId);
+    }),
+  );
+
+  it.effect("handles Devin todo update extension notifications", () =>
+    Effect.gen(function* () {
+      const threadId = ThreadId.make("devin-update-todos-extension");
+      const wrapperPath = yield* Effect.promise(() =>
+        makeMockDevinWrapper({
+          T3_ACP_EMIT_DEVIN_UPDATE_TODOS: "1",
+        }),
+      );
+      const adapter = yield* makeTestAdapter(wrapperPath);
+      const planUpdated =
+        yield* Deferred.make<Extract<ProviderRuntimeEvent, { type: "turn.plan.updated" }>>();
+
+      const eventsFiber = yield* Stream.runForEach(adapter.streamEvents, (event) => {
+        if (String(event.threadId) !== String(threadId)) {
+          return Effect.void;
+        }
+        return event.type === "turn.plan.updated"
+          ? Deferred.succeed(planUpdated, event).pipe(Effect.ignore)
+          : Effect.void;
+      }).pipe(Effect.forkChild);
+
+      yield* adapter.startSession({
+        threadId,
+        provider: ProviderDriverKind.make("devin"),
+        cwd: process.cwd(),
+        runtimeMode: "full-access",
+      });
+
+      const sendTurnFiber = yield* adapter
+        .sendTurn({ threadId, input: "update todos", attachments: [] })
+        .pipe(Effect.forkChild);
+
+      const planUpdatedEvent = yield* Deferred.await(planUpdated);
+      assert.equal(planUpdatedEvent.raw?.method, "devin/update_todos");
+      assert.deepEqual(planUpdatedEvent.payload, {
+        explanation: "Devin progress",
+        plan: [
+          { step: "Inspect Devin ACP callbacks", status: "completed" },
+          { step: "Implement the missing callback", status: "inProgress" },
+          { step: "Verify behavior", status: "pending" },
+        ],
+      });
+      yield* Fiber.join(sendTurnFiber);
+
+      yield* Fiber.interrupt(eventsFiber);
+      yield* adapter.stopSession(threadId);
+    }),
+  );
+
   it.effect("accepts URL elicitation completion notifications", () =>
     Effect.gen(function* () {
       const threadId = ThreadId.make("devin-url-elicitation-complete");

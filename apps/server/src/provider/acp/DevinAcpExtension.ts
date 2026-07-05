@@ -33,6 +33,14 @@ export type DevinAskQuestionResponse =
   | DevinAskQuestionAcceptedResponse
   | DevinAskQuestionCancelledResponse;
 
+export interface DevinPlanUpdate {
+  readonly explanation?: string;
+  readonly plan: ReadonlyArray<{
+    readonly step: string;
+    readonly status: "pending" | "inProgress" | "completed";
+  }>;
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -121,6 +129,33 @@ export function methodLooksLikeDevinAskQuestion(method: string): boolean {
   );
 }
 
+export function methodLooksLikeDevinCreatePlan(method: string): boolean {
+  const normalized = method
+    .trim()
+    .toLowerCase()
+    .replace(/[-\s]+/g, "_");
+  return (
+    normalized === "devin/create_plan" ||
+    normalized === "_devin/create_plan" ||
+    normalized === "create_plan"
+  );
+}
+
+export function methodLooksLikeDevinUpdateTodos(method: string): boolean {
+  const normalized = method
+    .trim()
+    .toLowerCase()
+    .replace(/[-\s]+/g, "_");
+  return (
+    normalized === "devin/update_todos" ||
+    normalized === "_devin/update_todos" ||
+    normalized === "devin/update_plan" ||
+    normalized === "_devin/update_plan" ||
+    normalized === "update_todos" ||
+    normalized === "update_plan"
+  );
+}
+
 export function parseDevinAskQuestionPayload(payload: unknown): ReadonlyArray<DevinAskQuestion> {
   const params = unwrapParams(payload);
   if (!isRecord(params)) {
@@ -187,5 +222,95 @@ export function makeDevinAskQuestionPrompt(payload: unknown): DevinAskQuestionPr
       ),
     }),
     makeCancelledResponse: () => ({ outcome: "cancelled" }),
+  };
+}
+
+export function extractDevinPlanMarkdown(payload: unknown): string {
+  const params = unwrapParams(payload);
+  if (!isRecord(params)) {
+    return "# Plan\n\n(Devin did not supply plan text.)";
+  }
+  const plan =
+    trimmed(params.plan) ??
+    trimmed(params.planMarkdown) ??
+    trimmed(params.markdown) ??
+    trimmed(params.content);
+  if (plan) {
+    return plan;
+  }
+
+  const title = trimmed(params.title) ?? trimmed(params.name) ?? "Plan";
+  const overview = trimmed(params.overview) ?? trimmed(params.description);
+  const update = extractDevinPlanUpdate(payload);
+  const steps = update.plan.map((entry, index) => `${index + 1}. ${entry.step}`);
+  return [`# ${title}`, overview, ...steps]
+    .filter((entry) => entry && entry.length > 0)
+    .join("\n\n");
+}
+
+function normalizePlanStatus(value: unknown): "pending" | "inProgress" | "completed" {
+  const normalized = trimmed(value)
+    ?.toLowerCase()
+    .replace(/[-\s]+/g, "_");
+  switch (normalized) {
+    case "completed":
+    case "complete":
+    case "done":
+      return "completed";
+    case "in_progress":
+    case "inprogress":
+    case "active":
+    case "running":
+      return "inProgress";
+    default:
+      return "pending";
+  }
+}
+
+function planEntryFromUnknown(value: unknown): DevinPlanUpdate["plan"][number] | undefined {
+  if (typeof value === "string") {
+    const step = trimmed(value);
+    return step ? { step, status: "pending" } : undefined;
+  }
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const step =
+    trimmed(value.step) ??
+    trimmed(value.content) ??
+    trimmed(value.title) ??
+    trimmed(value.text) ??
+    trimmed(value.description);
+  if (!step) {
+    return undefined;
+  }
+  return {
+    step,
+    status: normalizePlanStatus(value.status),
+  };
+}
+
+function planEntriesFromUnknown(value: unknown): DevinPlanUpdate["plan"] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value.flatMap((entry) => {
+    const planEntry = planEntryFromUnknown(entry);
+    return planEntry ? [planEntry] : [];
+  });
+}
+
+export function extractDevinPlanUpdate(payload: unknown): DevinPlanUpdate {
+  const params = unwrapParams(payload);
+  if (!isRecord(params)) {
+    return { plan: [] };
+  }
+  const todoPlan = planEntriesFromUnknown(params.todos);
+  const directPlan = planEntriesFromUnknown(params.plan);
+  const stepPlan = planEntriesFromUnknown(params.steps);
+  const explanation = trimmed(params.explanation) ?? trimmed(params.overview);
+  return {
+    ...(explanation ? { explanation } : {}),
+    plan: todoPlan.length > 0 ? todoPlan : directPlan.length > 0 ? directPlan : stepPlan,
   };
 }

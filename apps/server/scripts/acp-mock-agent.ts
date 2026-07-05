@@ -20,6 +20,8 @@ const emitGenericToolPlaceholders = process.env.T3_ACP_EMIT_GENERIC_TOOL_PLACEHO
 const emitAskQuestion = process.env.T3_ACP_EMIT_ASK_QUESTION === "1";
 const emitXAiAskUserQuestion = process.env.T3_ACP_EMIT_XAI_ASK_USER_QUESTION === "1";
 const emitDevinAskQuestion = process.env.T3_ACP_EMIT_DEVIN_ASK_QUESTION === "1";
+const emitDevinCreatePlan = process.env.T3_ACP_EMIT_DEVIN_CREATE_PLAN === "1";
+const emitDevinUpdateTodos = process.env.T3_ACP_EMIT_DEVIN_UPDATE_TODOS === "1";
 const emitElicitation = process.env.T3_ACP_EMIT_ELICITATION === "1";
 const emitUrlElicitationComplete = process.env.T3_ACP_EMIT_URL_ELICITATION_COMPLETE === "1";
 const emitXAiPromptCompleteThenHang = process.env.T3_ACP_EMIT_XAI_PROMPT_COMPLETE_THEN_HANG === "1";
@@ -862,6 +864,42 @@ const program = Effect.gen(function* () {
         ) {
           throw new Error("Unexpected Devin ask-question response answers.");
         }
+
+        return { stopReason: "end_turn" };
+      }
+
+      if (emitDevinCreatePlan) {
+        const result = yield* agent.client.extRequest("devin/create_plan", {
+          toolCallId: "devin-create-plan-tool-call-1",
+          title: "Devin plan",
+          overview: "Implement the requested Devin callback",
+          todos: [
+            { content: "Inspect Devin ACP callbacks", status: "completed" },
+            { content: "Implement the missing callback", status: "in_progress" },
+          ],
+        });
+        if (
+          typeof result !== "object" ||
+          result === null ||
+          !("accepted" in result) ||
+          result.accepted !== true
+        ) {
+          throw new Error("Expected accepted Devin create-plan response.");
+        }
+
+        return { stopReason: "end_turn" };
+      }
+
+      if (emitDevinUpdateTodos) {
+        yield* agent.client.extNotification("devin/update_todos", {
+          toolCallId: "devin-update-todos-tool-call-1",
+          overview: "Devin progress",
+          todos: [
+            { content: "Inspect Devin ACP callbacks", status: "completed" },
+            { content: "Implement the missing callback", status: "in_progress" },
+            { content: "Verify behavior", status: "pending" },
+          ],
+        });
 
         return { stopReason: "end_turn" };
       }
