@@ -25,6 +25,7 @@ import { buildBooleanOptionDescriptor, buildSelectOptionDescriptor } from "../pr
 import * as AcpSessionRuntime from "./AcpSessionRuntime.ts";
 import {
   findSessionModelConfigOption,
+  findSessionModeByAliases,
   flattenSessionConfigSelectOptions,
   type AcpSessionConfigSelectOptionValue,
   type AcpSessionModeState,
@@ -710,26 +711,11 @@ export function applyDevinAcpModelSelection<E>(input: {
     .pipe(Effect.mapError(input.mapError), Effect.as(input.requestedModelId));
 }
 
-function normalizeModeToken(value: string): string {
-  return value.toLowerCase().replace(/[\s_]+/g, "-");
-}
-
 function findModeId(
   modeState: AcpSessionModeState | undefined,
   aliases: ReadonlyArray<string>,
 ): string | undefined {
-  if (!modeState) {
-    return undefined;
-  }
-  const normalizedAliases = new Set(aliases.map(normalizeModeToken));
-  for (const mode of modeState.availableModes) {
-    const id = normalizeModeToken(mode.id);
-    const name = normalizeModeToken(mode.name);
-    if (normalizedAliases.has(id) || normalizedAliases.has(name)) {
-      return mode.id;
-    }
-  }
-  return undefined;
+  return modeState ? findSessionModeByAliases(modeState.availableModes, aliases)?.id : undefined;
 }
 
 export function applyDevinRequestedMode<E>(input: {
@@ -743,11 +729,19 @@ export function applyDevinRequestedMode<E>(input: {
 }): Effect.Effect<void, E> {
   const aliases =
     input.interactionMode === "plan"
-      ? ["plan"]
+      ? ["architect", "plan"]
       : input.runtimeMode === "full-access"
-        ? ["bypass", "bypass-permissions", "bypasspermissions", "danger-full-access"]
+        ? [
+            "bypass",
+            "bypass-permissions",
+            "bypasspermissions",
+            "danger-full-access",
+            "code",
+            "implement",
+            "agent",
+          ]
         : input.runtimeMode === "auto-accept-edits"
-          ? ["accept-edits", "acceptedits", "accept-edits-mode"]
+          ? ["accept-edits", "acceptedits", "accept-edits-mode", "code", "implement", "agent"]
           : ["ask", "normal", "default"];
 
   return input.runtime.getModeState.pipe(

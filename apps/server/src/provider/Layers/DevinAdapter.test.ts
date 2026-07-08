@@ -42,6 +42,15 @@ async function makeMockDevinWrapper(extraEnv?: Record<string, string>) {
   return wrapperPath;
 }
 
+async function readJsonLines(filePath: string) {
+  const raw = await NodeFSP.readFile(filePath, "utf8");
+  return raw
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0)
+    .map((line) => JSON.parse(line) as Record<string, unknown>);
+}
+
 const devinAdapterTestLayer = ServerConfig.layerTest(process.cwd(), {
   prefix: "t3code-devin-adapter-test-",
 }).pipe(Layer.provideMerge(NodeServices.layer));
@@ -139,6 +148,47 @@ it.layer(devinAdapterTestLayer)("DevinAdapterLive", (it) => {
       }
 
       yield* adapter.stopSession(threadId);
+    }),
+  );
+
+  it.effect("maps full-access and plan turns onto Devin code and architect modes", () =>
+    Effect.gen(function* () {
+      const threadId = ThreadId.make("devin-plan-mode-probe");
+      const tempDir = yield* Effect.promise(() =>
+        NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "devin-acp-mode-")),
+      );
+      const requestLogPath = NodePath.join(tempDir, "requests.ndjson");
+      yield* Effect.promise(() => NodeFSP.writeFile(requestLogPath, "", "utf8"));
+      const wrapperPath = yield* Effect.promise(() =>
+        makeMockDevinWrapper({ T3_ACP_REQUEST_LOG_PATH: requestLogPath }),
+      );
+      const adapter = yield* makeTestAdapter(wrapperPath);
+
+      yield* adapter.startSession({
+        threadId,
+        provider: ProviderDriverKind.make("devin"),
+        cwd: process.cwd(),
+        runtimeMode: "full-access",
+        modelSelection: { instanceId: ProviderInstanceId.make("devin"), model: "composer-2" },
+      });
+
+      yield* adapter.sendTurn({
+        threadId,
+        input: "plan this change",
+        attachments: [],
+        interactionMode: "plan",
+      });
+      yield* adapter.stopSession(threadId);
+
+      const requests = yield* Effect.promise(() => readJsonLines(requestLogPath));
+      const modeValues = requests.flatMap((entry) => {
+        const params = entry.params as Record<string, unknown> | undefined;
+        return entry.method === "session/set_config_option" && params?.configId === "mode"
+          ? [String(params.value)]
+          : [];
+      });
+
+      assert.deepStrictEqual(modeValues, ["code", "architect"]);
     }),
   );
 

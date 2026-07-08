@@ -56,6 +56,58 @@ export interface AcpSessionModeState {
   readonly availableModes: ReadonlyArray<AcpSessionMode>;
 }
 
+function normalizeModeAliasText(value: string): string {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+
+function normalizeModeSearchText(mode: AcpSessionMode): string {
+  return [mode.id, mode.name, mode.description]
+    .filter((value): value is string => typeof value === "string" && value.length > 0)
+    .map(normalizeModeAliasText)
+    .filter((value) => value.length > 0)
+    .join(" ");
+}
+
+export function findSessionModeByAliases(
+  modes: ReadonlyArray<AcpSessionMode>,
+  aliases: ReadonlyArray<string>,
+): AcpSessionMode | undefined {
+  const normalizedAliases = aliases
+    .map((alias) => ({
+      raw: alias.trim().toLowerCase(),
+      search: normalizeModeAliasText(alias),
+    }))
+    .filter((alias) => alias.raw.length > 0 && alias.search.length > 0);
+
+  for (const alias of normalizedAliases) {
+    const exact = modes.find((mode) => {
+      const id = mode.id.trim().toLowerCase();
+      const name = mode.name.trim().toLowerCase();
+      return (
+        id === alias.raw ||
+        name === alias.raw ||
+        normalizeModeAliasText(mode.id) === alias.search ||
+        normalizeModeAliasText(mode.name) === alias.search
+      );
+    });
+    if (exact) {
+      return exact;
+    }
+  }
+
+  for (const alias of normalizedAliases) {
+    const partial = modes.find((mode) => normalizeModeSearchText(mode).includes(alias.search));
+    if (partial) {
+      return partial;
+    }
+  }
+  return undefined;
+}
+
 export interface AcpSessionConfigSelectOptionValue {
   readonly value: string;
   readonly name: string;

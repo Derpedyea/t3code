@@ -4,6 +4,7 @@ import type * as EffectAcpSchema from "effect-acp/schema";
 
 import {
   extractModelConfigId,
+  findSessionModeByAliases,
   findSessionModelConfigOption,
   flattenSessionConfigSelectOptions,
   mergeToolCallState,
@@ -15,6 +16,40 @@ import {
 } from "./AcpRuntimeModel.ts";
 
 describe("AcpRuntimeModel", () => {
+  it("finds session modes by exact and normalized aliases", () => {
+    expect(
+      findSessionModeByAliases(
+        [
+          { id: "ask", name: "Ask" },
+          { id: "architect-mode", name: "Architect Mode" },
+        ],
+        ["architect mode"],
+      )?.id,
+    ).toBe("architect-mode");
+
+    expect(
+      findSessionModeByAliases(
+        [
+          { id: "ask", name: "Ask" },
+          { id: "bypass-permissions", name: "Bypass Permissions" },
+        ],
+        ["bypass permissions"],
+      )?.id,
+    ).toBe("bypass-permissions");
+  });
+
+  it("finds session modes by description text when ids and names differ", () => {
+    expect(
+      findSessionModeByAliases(
+        [
+          { id: "ask", name: "Ask" },
+          { id: "design", name: "Design", description: "Architect software changes" },
+        ],
+        ["architect"],
+      )?.id,
+    ).toBe("design");
+  });
+
   it("parses session mode state from typed ACP session setup responses", () => {
     const modeState = parseSessionModeState({
       sessionId: "session-1",

@@ -411,4 +411,64 @@ describe("DevinAcpSupport", () => {
       expect(modeCalls).toEqual(["ask"]);
     }),
   );
+
+  it.effect("maps app plan mode to Devin architect mode", () =>
+    Effect.gen(function* () {
+      const modeCalls: Array<string> = [];
+      const runtime = {
+        getModeState: Effect.succeed({
+          currentModeId: "ask",
+          availableModes: [
+            { id: "ask", name: "Ask" },
+            { id: "architect-mode", name: "Architect Mode" },
+            { id: "code", name: "Code" },
+          ],
+        }),
+        setMode: (modeId: string) =>
+          Effect.sync(() => {
+            modeCalls.push(modeId);
+            return {};
+          }),
+      };
+
+      yield* applyDevinRequestedMode({
+        runtime,
+        runtimeMode: "full-access",
+        interactionMode: "plan",
+        mapError: (cause) => cause.message,
+      });
+
+      expect(modeCalls).toEqual(["architect-mode"]);
+    }),
+  );
+
+  it.effect("maps full-access runtime mode to Devin code mode", () =>
+    Effect.gen(function* () {
+      const modeCalls: Array<string> = [];
+      const runtime = {
+        getModeState: Effect.succeed({
+          currentModeId: "ask",
+          availableModes: [
+            { id: "ask", name: "Ask" },
+            { id: "architect", name: "Architect" },
+            { id: "coding-mode", name: "Code Mode" },
+          ],
+        }),
+        setMode: (modeId: string) =>
+          Effect.sync(() => {
+            modeCalls.push(modeId);
+            return {};
+          }),
+      };
+
+      yield* applyDevinRequestedMode({
+        runtime,
+        runtimeMode: "full-access",
+        interactionMode: undefined,
+        mapError: (cause) => cause.message,
+      });
+
+      expect(modeCalls).toEqual(["coding-mode"]);
+    }),
+  );
 });
