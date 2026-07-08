@@ -82,7 +82,7 @@ export function makeDevinAdapter(devinSettings: DevinSettings, options?: DevinAd
                 new ProviderAdapterProcessError({
                   provider: PROVIDER,
                   threadId: input.threadId,
-                  detail: cause.message,
+                  detail: "Failed to start Devin ACP runtime.",
                   cause,
                 }),
             ),

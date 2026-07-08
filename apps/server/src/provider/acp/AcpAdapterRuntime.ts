@@ -658,7 +658,7 @@ export function prepareAcpPromptContent(input: {
               new ProviderAdapterRequestError({
                 provider: input.provider,
                 method: "session/prompt",
-                detail: cause.message,
+                detail: `Failed to read attachment file '${attachment.id}'.`,
                 cause,
               }),
           ),
