@@ -27,7 +27,11 @@ interface AcpEventStamp {
 
 type AcpCanonicalRequestType = Extract<
   CanonicalRequestType,
-  "exec_command_approval" | "file_read_approval" | "file_change_approval" | "unknown"
+  | "exec_command_approval"
+  | "file_read_approval"
+  | "file_change_approval"
+  | "dynamic_tool_call"
+  | "unknown"
 >;
 
 function canonicalRequestTypeFromAcpKind(kind: string | "unknown"): AcpCanonicalRequestType {
@@ -41,7 +45,7 @@ function canonicalRequestTypeFromAcpKind(kind: string | "unknown"): AcpCanonical
     case "move":
       return "file_change_approval";
     default:
-      return "unknown";
+      return "dynamic_tool_call";
   }
 }
 
@@ -150,6 +154,33 @@ export function makeAcpPlanUpdatedEvent(input: {
     threadId: input.threadId,
     turnId: input.turnId,
     payload: input.payload,
+    raw: {
+      source: input.source,
+      method: input.method,
+      payload: input.rawPayload,
+    },
+  };
+}
+
+export function makeAcpProposedPlanCompletedEvent(input: {
+  readonly stamp: AcpEventStamp;
+  readonly provider: ProviderDriverKind;
+  readonly threadId: ThreadId;
+  readonly turnId: TurnId | undefined;
+  readonly planMarkdown: string;
+  readonly source: AcpAdapterRawSource;
+  readonly method: string;
+  readonly rawPayload: unknown;
+}): ProviderRuntimeEvent {
+  return {
+    type: "turn.proposed.completed",
+    ...input.stamp,
+    provider: input.provider,
+    threadId: input.threadId,
+    turnId: input.turnId,
+    payload: {
+      planMarkdown: input.planMarkdown,
+    },
     raw: {
       source: input.source,
       method: input.method,

@@ -22,6 +22,7 @@ import { resolveSpawnCommand } from "@t3tools/shared/shell";
 
 import {
   collectSessionConfigOptionValues,
+  extractAcpSwitchModePlanMarkdown,
   extractModelConfigId,
   findSessionConfigOption,
   mergeToolCallState,
@@ -972,6 +973,9 @@ function shouldEmitToolCallUpdate(
   next: AcpToolCallState,
 ): boolean {
   if (next.status === "completed" || next.status === "failed") {
+    return true;
+  }
+  if (extractAcpSwitchModePlanMarkdown(next)) {
     return true;
   }
   if (!next.detail) {

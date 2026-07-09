@@ -19,6 +19,7 @@ const emitInterleavedAssistantToolCalls =
 const emitGenericToolPlaceholders = process.env.T3_ACP_EMIT_GENERIC_TOOL_PLACEHOLDERS === "1";
 const emitSparsePermissionToolCall = process.env.T3_ACP_EMIT_SPARSE_PERMISSION_TOOL_CALL === "1";
 const emitAgentThought = process.env.T3_ACP_EMIT_AGENT_THOUGHT === "1";
+const emitDevinPlanExitPermission = process.env.T3_ACP_EMIT_DEVIN_PLAN_EXIT_PERMISSION === "1";
 const emitAskQuestion = process.env.T3_ACP_EMIT_ASK_QUESTION === "1";
 const emitXAiAskUserQuestion = process.env.T3_ACP_EMIT_XAI_ASK_USER_QUESTION === "1";
 const emitDevinAskQuestion = process.env.T3_ACP_EMIT_DEVIN_ASK_QUESTION === "1";
@@ -742,6 +743,91 @@ const program = Effect.gen(function* () {
         return { stopReason: cancelled ? "cancelled" : "end_turn" };
       }
 
+      if (emitDevinPlanExitPermission) {
+        const toolCallId = "devin-exit-plan-tool-call-1";
+        const plan =
+          "1. Create `probe-output.txt` with the content `hello`.\n2. Read the file back to verify it contains exactly `hello`.";
+
+        yield* agent.client.sessionUpdate({
+          sessionId: requestedSessionId,
+          update: {
+            sessionUpdate: "agent_message_chunk",
+            content: {
+              type: "text",
+              text: `## Plan\n\n${plan}`,
+            },
+          },
+        });
+
+        yield* agent.client.sessionUpdate({
+          sessionId: requestedSessionId,
+          update: {
+            sessionUpdate: "tool_call",
+            toolCallId,
+            title: "Exit plan mode",
+            kind: "switch_mode",
+            rawInput: { plan },
+          },
+        });
+
+        const permission = yield* agent.client.requestPermission({
+          sessionId: requestedSessionId,
+          toolCall: { toolCallId },
+          options: [
+            {
+              optionId: "plan_accept_edits",
+              name: "Yes, implement plan and accept edits",
+              kind: "allow_once",
+            },
+            {
+              optionId: "plan_bypass",
+              name: "Yes, implement plan and bypass permissions",
+              kind: "allow_once",
+            },
+            { optionId: "reject_once", name: "No, plan needs changes", kind: "reject_once" },
+          ],
+        });
+
+        const rejected =
+          permission.outcome.outcome === "cancelled" ||
+          ("optionId" in permission.outcome && permission.outcome.optionId === "reject_once");
+
+        yield* agent.client.sessionUpdate({
+          sessionId: requestedSessionId,
+          update: {
+            sessionUpdate: "tool_call_update",
+            toolCallId,
+            status: rejected ? "failed" : "completed",
+            ...(rejected
+              ? {
+                  content: [
+                    {
+                      type: "content",
+                      content: {
+                        type: "text",
+                        text: "Tool execution was rejected: User rejected this tool call",
+                      },
+                    },
+                  ],
+                }
+              : {}),
+          },
+        });
+
+        yield* agent.client.sessionUpdate({
+          sessionId: requestedSessionId,
+          update: {
+            sessionUpdate: "agent_message_chunk",
+            content: {
+              type: "text",
+              text: "The plan is ready for your review.",
+            },
+          },
+        });
+
+        return { stopReason: "end_turn" };
+      }
+
       if (emitGenericToolPlaceholders) {
         const toolCallId = "tool-call-generic-1";
 
@@ -950,15 +1036,12 @@ const program = Effect.gen(function* () {
           typeof result !== "object" ||
           result === null ||
           !("action" in result) ||
-          typeof result.action !== "object" ||
-          result.action === null ||
-          !("action" in result.action) ||
-          result.action.action !== "accept" ||
-          !("content" in result.action) ||
-          typeof result.action.content !== "object" ||
-          result.action.content === null ||
-          !("q0" in result.action.content) ||
-          result.action.content.q0 !== "Research or plan only"
+          result.action !== "accept" ||
+          !("content" in result) ||
+          typeof result.content !== "object" ||
+          result.content === null ||
+          !("q0" in result.content) ||
+          result.content.q0 !== "Research or plan only"
         ) {
           throw new Error("Unexpected private Devin elicitation response.");
         }

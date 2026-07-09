@@ -104,6 +104,44 @@ describe("DevinAcpSupport", () => {
     ]);
   });
 
+  it("groups Devin Lightning variants as fast model variants", () => {
+    const groups = devinAcpModelVariantGroupsFromConfigOptions([
+      {
+        id: "model",
+        name: "Model",
+        category: "model",
+        type: "select",
+        currentValue: "swe-1-7-lightning",
+        options: [
+          { value: "swe-1-7", name: "SWE-1.7" },
+          { value: "swe-1-7-lightning", name: "SWE-1.7 Lightning" },
+        ],
+      },
+    ]);
+
+    expect(
+      groups.map((group) => ({
+        id: group.baseModelId,
+        name: group.baseModelName,
+        current: group.currentVariant?.exactModelId,
+        variants: group.variants.map((variant) => ({
+          exact: variant.exactModelId,
+          fast: variant.fastMode,
+        })),
+      })),
+    ).toEqual([
+      {
+        id: "swe-1-7",
+        name: "SWE-1.7",
+        current: "swe-1-7-lightning",
+        variants: [
+          { exact: "swe-1-7", fast: false },
+          { exact: "swe-1-7-lightning", fast: true },
+        ],
+      },
+    ]);
+  });
+
   it("keeps model options selectable when exact ids collide on the same display variant", () => {
     const groups = devinAcpModelVariantGroupsFromConfigOptions([
       {

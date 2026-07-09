@@ -552,6 +552,33 @@ export function parsePermissionRequest(
   };
 }
 
+function trimmedString(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+}
+
+export function extractAcpSwitchModePlanMarkdown(toolCall: AcpToolCallState): string | undefined {
+  if (toolCall.kind !== "switch_mode") {
+    return undefined;
+  }
+  const rawInput = toolCall.data.rawInput;
+  if (typeof rawInput === "string") {
+    return trimmedString(rawInput);
+  }
+  if (!isRecord(rawInput)) {
+    return undefined;
+  }
+  return (
+    trimmedString(rawInput.plan) ??
+    trimmedString(rawInput.planMarkdown) ??
+    trimmedString(rawInput.markdown) ??
+    trimmedString(rawInput.content)
+  );
+}
+
 export function sessionUpdateIsReplay(params: EffectAcpSchema.SessionNotification): boolean {
   const meta = params._meta;
   return isRecord(meta) && meta.isReplay === true;

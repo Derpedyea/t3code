@@ -66,6 +66,44 @@ describe("AcpCoreRuntimeEvents", () => {
         decision: "accept",
       },
     });
+
+    const switchModePermissionRequest = {
+      kind: "switch_mode" as const,
+      detail: "Exit plan mode",
+      toolCall: {
+        toolCallId: "tool-plan",
+        kind: "switch_mode",
+        status: "pending" as const,
+        title: "Exit plan mode",
+        data: {
+          toolCallId: "tool-plan",
+          kind: "switch_mode",
+          rawInput: { plan: "1. Inspect\n2. Implement" },
+        },
+      },
+    };
+
+    expect(
+      makeAcpRequestOpenedEvent({
+        stamp,
+        provider: ProviderDriverKind.make("devin"),
+        threadId: "thread-1" as never,
+        turnId,
+        requestId: RuntimeRequestId.make("request-plan"),
+        permissionRequest: switchModePermissionRequest,
+        detail: "Exit plan mode",
+        args: { toolCallId: "tool-plan" },
+        source: "acp.jsonrpc",
+        method: "session/request_permission",
+        rawPayload: { sessionId: "session-1" },
+      }),
+    ).toMatchObject({
+      type: "request.opened",
+      payload: {
+        requestType: "dynamic_tool_call",
+        detail: "Exit plan mode",
+      },
+    });
   });
 
   it("maps ACP core plan, tool-call, and content updates", () => {

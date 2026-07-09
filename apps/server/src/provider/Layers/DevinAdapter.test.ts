@@ -262,6 +262,75 @@ it.layer(devinAdapterTestLayer)("DevinAdapterLive", (it) => {
     }),
   );
 
+  it.effect("surfaces Devin plan-exit permissions as proposed plans and dynamic approvals", () =>
+    Effect.gen(function* () {
+      const threadId = ThreadId.make("devin-plan-exit-permission");
+      const wrapperPath = yield* Effect.promise(() =>
+        makeMockDevinWrapper({
+          T3_ACP_EMIT_DEVIN_PLAN_EXIT_PERMISSION: "1",
+        }),
+      );
+      const adapter = yield* makeTestAdapter(wrapperPath);
+      const proposed =
+        yield* Deferred.make<Extract<ProviderRuntimeEvent, { type: "turn.proposed.completed" }>>();
+      const requestOpened =
+        yield* Deferred.make<Extract<ProviderRuntimeEvent, { type: "request.opened" }>>();
+      const turnCompleted = yield* Deferred.make<void>();
+
+      const eventsFiber = yield* Stream.runForEach(adapter.streamEvents, (event) => {
+        if (String(event.threadId) !== String(threadId)) {
+          return Effect.void;
+        }
+        if (event.type === "turn.proposed.completed") {
+          return Deferred.succeed(proposed, event).pipe(Effect.ignore);
+        }
+        if (event.type === "request.opened") {
+          return Deferred.succeed(requestOpened, event).pipe(Effect.ignore);
+        }
+        if (event.type === "turn.completed") {
+          return Deferred.succeed(turnCompleted, undefined).pipe(Effect.ignore);
+        }
+        return Effect.void;
+      }).pipe(Effect.forkChild);
+
+      yield* adapter.startSession({
+        threadId,
+        provider: ProviderDriverKind.make("devin"),
+        cwd: process.cwd(),
+        runtimeMode: "approval-required",
+      });
+
+      const sendTurnFiber = yield* adapter
+        .sendTurn({
+          threadId,
+          input: "make a plan",
+          attachments: [],
+          interactionMode: "plan",
+        })
+        .pipe(Effect.forkChild);
+
+      const proposedEvent = yield* Deferred.await(proposed);
+      assert.equal(proposedEvent.raw?.method, "session/update");
+      assert.include(proposedEvent.payload.planMarkdown, "probe-output.txt");
+      assert.include(proposedEvent.payload.planMarkdown, "verify it contains exactly `hello`");
+
+      const opened = yield* Deferred.await(requestOpened);
+      assert.equal(opened.payload.requestType, "dynamic_tool_call");
+      assert.equal(opened.payload.detail, "Exit plan mode");
+
+      yield* adapter.respondToRequest(
+        threadId,
+        ApprovalRequestId.make(String(opened.requestId)),
+        "decline",
+      );
+
+      yield* Deferred.await(turnCompleted);
+      yield* Fiber.join(sendTurnFiber);
+      yield* Fiber.interrupt(eventsFiber);
+      yield* adapter.stopSession(threadId);
+    }),
+  );
+
   it.effect("maps full-access and plan turns onto Devin bypass and plan modes", () =>
     Effect.gen(function* () {
       const threadId = ThreadId.make("devin-plan-mode-probe");

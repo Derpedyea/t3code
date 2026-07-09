@@ -28,12 +28,17 @@ import {
   makeAcpAssistantItemEvent,
   makeAcpContentDeltaEvent,
   makeAcpPlanUpdatedEvent,
+  makeAcpProposedPlanCompletedEvent,
   makeAcpRequestOpenedEvent,
   makeAcpRequestResolvedEvent,
   makeAcpToolCallEvent,
 } from "./AcpCoreRuntimeEvents.ts";
 import type { AcpSessionRuntimeEvent } from "./AcpSessionRuntime.ts";
-import { parsePermissionRequest, type AcpToolCallState } from "./AcpRuntimeModel.ts";
+import {
+  extractAcpSwitchModePlanMarkdown,
+  parsePermissionRequest,
+  type AcpToolCallState,
+} from "./AcpRuntimeModel.ts";
 
 const encodeUnknownJsonStringExit = Schema.encodeUnknownExit(Schema.UnknownFromJsonString);
 
@@ -233,6 +238,40 @@ export function forkAcpAdapterNotificationStream<
     provider: input.provider,
     offerRuntimeEvent: input.offerRuntimeEvent,
   });
+  const emitProposedPlanFromToolCall = (
+    ctx: Ctx,
+    turnId: TurnId | undefined,
+    stamp: AcpAdapterEventStamp,
+    toolCall: AcpToolCallState,
+    rawPayload: unknown,
+  ) =>
+    Effect.gen(function* () {
+      if (toolCall.status === "completed" || toolCall.status === "failed") {
+        return false;
+      }
+      const planMarkdown = extractAcpSwitchModePlanMarkdown(toolCall);
+      if (!planMarkdown) {
+        return false;
+      }
+      const fingerprint = `${turnId ?? "no-turn"}:proposed:${toolCall.toolCallId}:${planMarkdown}`;
+      if (ctx.lastPlanFingerprint === fingerprint) {
+        return false;
+      }
+      ctx.lastPlanFingerprint = fingerprint;
+      yield* input.offerRuntimeEvent(
+        makeAcpProposedPlanCompletedEvent({
+          stamp,
+          provider: input.provider,
+          threadId: ctx.threadId,
+          turnId,
+          planMarkdown,
+          source: "acp.jsonrpc",
+          method: "session/update",
+          rawPayload,
+        }),
+      );
+      return true;
+    });
 
   return Stream.runDrain(
     Stream.mapEffect(input.events, (event) =>
@@ -298,16 +337,26 @@ export function forkAcpAdapterNotificationStream<
             );
             return;
           case "ToolCallUpdated":
-            yield* input.offerRuntimeEvent(
-              makeAcpToolCallEvent({
+            {
+              const proposedPlanEmitted = yield* emitProposedPlanFromToolCall(
+                input.ctx,
+                notificationTurnId,
                 stamp,
-                provider: input.provider,
-                threadId: input.ctx.threadId,
-                turnId: notificationTurnId,
-                toolCall: event.toolCall,
-                rawPayload: event.rawPayload,
-              }),
-            );
+                event.toolCall,
+                event.rawPayload,
+              );
+              const toolCallStamp = proposedPlanEmitted ? yield* input.makeEventStamp() : stamp;
+              yield* input.offerRuntimeEvent(
+                makeAcpToolCallEvent({
+                  stamp: toolCallStamp,
+                  provider: input.provider,
+                  threadId: input.ctx.threadId,
+                  turnId: notificationTurnId,
+                  toolCall: event.toolCall,
+                  rawPayload: event.rawPayload,
+                }),
+              );
+            }
             return;
           case "ContentDelta":
             yield* input.offerRuntimeEvent(

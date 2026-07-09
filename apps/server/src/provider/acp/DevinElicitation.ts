@@ -210,6 +210,39 @@ export interface DevinElicitationPrompt {
   readonly makeResponse: (answers: ProviderUserInputAnswers) => EffectAcpSchema.ElicitationResponse;
 }
 
+export type DevinPrivateElicitationResponse =
+  | {
+      readonly _meta?: { readonly [x: string]: unknown } | null;
+      readonly action: "accept";
+      readonly content?: { readonly [x: string]: EffectAcpSchema.ElicitationContentValue } | null;
+    }
+  | {
+      readonly _meta?: { readonly [x: string]: unknown } | null;
+      readonly action: "decline";
+    }
+  | {
+      readonly _meta?: { readonly [x: string]: unknown } | null;
+      readonly action: "cancel";
+    };
+
+export function toDevinPrivateElicitationResponse(
+  response: EffectAcpSchema.ElicitationResponse,
+): DevinPrivateElicitationResponse {
+  const meta = response._meta === undefined ? {} : { _meta: response._meta };
+  switch (response.action.action) {
+    case "accept":
+      return {
+        ...meta,
+        action: "accept",
+        ...(response.action.content === undefined ? {} : { content: response.action.content }),
+      };
+    case "cancel":
+      return { ...meta, action: "cancel" };
+    case "decline":
+      return { ...meta, action: "decline" };
+  }
+}
+
 function makeDevinElicitationQuestion(
   request: Extract<EffectAcpSchema.ElicitationRequest, { readonly mode: "form" }>,
   id: string,

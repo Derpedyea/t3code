@@ -37,7 +37,10 @@ import {
   methodLooksLikeDevinUpdateTodos,
   type DevinAskQuestionResponse,
 } from "../acp/DevinAcpExtension.ts";
-import { makeDevinElicitationPrompt } from "../acp/DevinElicitation.ts";
+import {
+  makeDevinElicitationPrompt,
+  toDevinPrivateElicitationResponse,
+} from "../acp/DevinElicitation.ts";
 import { ProviderAdapterProcessError, type ProviderAdapterRequestError } from "../Errors.ts";
 import { type EventNdjsonLogger } from "./EventNdjsonLogger.ts";
 
@@ -178,7 +181,9 @@ export function makeDevinAdapter(devinSettings: DevinSettings, options?: DevinAd
                     ),
                   ),
                   Effect.flatMap((request) =>
-                    handleDevinElicitation(method, "acp.devin.extension", request),
+                    handleDevinElicitation(method, "acp.devin.extension", request).pipe(
+                      Effect.map(toDevinPrivateElicitationResponse),
+                    ),
                   ),
                 );
               }

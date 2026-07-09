@@ -4,6 +4,7 @@ import type * as EffectAcpSchema from "effect-acp/schema";
 
 import {
   extractModelConfigId,
+  extractAcpSwitchModePlanMarkdown,
   findSessionModeByAliases,
   findSessionModelConfigOption,
   flattenSessionConfigSelectOptions,
@@ -551,5 +552,39 @@ describe("AcpRuntimeModel", () => {
         },
       },
     });
+  });
+
+  it("extracts proposed plan markdown from ACP switch-mode tool calls", () => {
+    expect(
+      extractAcpSwitchModePlanMarkdown({
+        toolCallId: "exit-plan-1",
+        kind: "switch_mode",
+        title: "Exit plan mode",
+        status: "pending",
+        data: {
+          toolCallId: "exit-plan-1",
+          kind: "switch_mode",
+          rawInput: {
+            plan: "  1. Inspect\n2. Implement  ",
+          },
+        },
+      }),
+    ).toBe("1. Inspect\n2. Implement");
+
+    expect(
+      extractAcpSwitchModePlanMarkdown({
+        toolCallId: "terminal-1",
+        kind: "execute",
+        title: "Terminal",
+        status: "pending",
+        data: {
+          toolCallId: "terminal-1",
+          kind: "execute",
+          rawInput: {
+            plan: "1. Not a plan exit",
+          },
+        },
+      }),
+    ).toBeUndefined();
   });
 });

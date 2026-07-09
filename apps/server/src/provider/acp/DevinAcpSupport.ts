@@ -320,7 +320,7 @@ export function parseDevinAcpModelVariant(
     return undefined;
   }
 
-  const fast = stripNameSuffix(displayName, /\s+Fast$/iu);
+  const fast = stripNameSuffix(displayName, /\s+(?:Fast|Lightning)$/iu);
   displayName = fast.name;
   const context = stripNameSuffix(displayName, /\s+1M$/iu);
   displayName = context.name;
