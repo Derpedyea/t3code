@@ -131,6 +131,51 @@ describe("makeDevinElicitationPrompt", () => {
         content: { q0: "Research or plan only" },
       },
     });
+    expect(prompt.makeResponse({ q0: "Only inspect the failing file" })).toEqual({
+      action: {
+        action: "accept",
+        content: { q0: "Only inspect the failing file" },
+      },
+    });
+  });
+
+  it("maps selected labels but passes through custom answers when Devin allows Other responses", () => {
+    const prompt = makeDevinElicitationPrompt({
+      mode: "form",
+      sessionId: "session-1",
+      message: "Which scope?",
+      requestedSchema: {
+        type: "object",
+        properties: {
+          q0: {
+            type: "string",
+            title: "Scope",
+            description: "Which scope should Devin use?",
+            oneOf: [
+              { const: "workspace", title: "Workspace" },
+              { const: "session", title: "Session" },
+            ],
+          },
+        },
+        required: ["q0"],
+      },
+      _meta: {
+        "cognition.ai/allowOther": true,
+      },
+    });
+
+    expect(prompt.makeResponse({ q0: "Workspace" })).toEqual({
+      action: {
+        action: "accept",
+        content: { q0: "workspace" },
+      },
+    });
+    expect(prompt.makeResponse({ q0: "Only inspect the failing file" })).toEqual({
+      action: {
+        action: "accept",
+        content: { q0: "Only inspect the failing file" },
+      },
+    });
   });
 
   it("treats empty numeric answers as missing instead of zero", () => {

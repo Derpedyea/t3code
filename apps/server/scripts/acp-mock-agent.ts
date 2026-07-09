@@ -1046,6 +1046,17 @@ const program = Effect.gen(function* () {
           throw new Error("Unexpected private Devin elicitation response.");
         }
 
+        yield* agent.client.sessionUpdate({
+          sessionId: requestedSessionId,
+          update: {
+            sessionUpdate: "agent_message_chunk",
+            content: {
+              type: "text",
+              text: "Devin received the answer and continued.",
+            },
+          },
+        });
+
         return { stopReason: "end_turn" };
       }
 

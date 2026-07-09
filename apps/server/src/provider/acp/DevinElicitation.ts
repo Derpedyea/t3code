@@ -115,12 +115,18 @@ function normalizeStringAnswer(
   valuesByLabel: ReadonlyMap<string, string>,
   allowedValues: ReadonlySet<string>,
   fallback: string | null | undefined,
+  allowOther: boolean,
 ): string | undefined {
   const value = answerStrings(answer)[0] ?? trimmedString(fallback);
   if (!value) {
     return undefined;
   }
-  return allowedValues.size > 0 ? resolveChoiceValue(value, valuesByLabel, allowedValues) : value;
+  if (allowedValues.size === 0) {
+    return value;
+  }
+  return (
+    resolveChoiceValue(value, valuesByLabel, allowedValues) ?? (allowOther ? value : undefined)
+  );
 }
 
 function normalizeStringArrayAnswer(
@@ -128,6 +134,7 @@ function normalizeStringArrayAnswer(
   valuesByLabel: ReadonlyMap<string, string>,
   allowedValues: ReadonlySet<string>,
   fallback: ReadonlyArray<string> | null | undefined,
+  allowOther: boolean,
 ): ReadonlyArray<string> | undefined {
   const values = Array.isArray(answer)
     ? answerStrings(answer)
@@ -149,10 +156,10 @@ function normalizeStringArrayAnswer(
   const normalized: Array<string> = [];
   for (const value of values) {
     const resolved = resolveChoiceValue(value, valuesByLabel, allowedValues);
-    if (!resolved) {
+    if (!resolved && !allowOther) {
       return undefined;
     }
-    normalized.push(resolved);
+    normalized.push(resolved ?? value);
   }
   return normalized.length > 0 ? normalized : undefined;
 }
@@ -243,6 +250,11 @@ export function toDevinPrivateElicitationResponse(
   }
 }
 
+function devinElicitationAllowsOther(request: EffectAcpSchema.ElicitationRequest): boolean {
+  const meta = request._meta;
+  return typeof meta === "object" && meta !== null && meta["cognition.ai/allowOther"] === true;
+}
+
 function makeDevinElicitationQuestion(
   request: Extract<EffectAcpSchema.ElicitationRequest, { readonly mode: "form" }>,
   id: string,
@@ -253,6 +265,7 @@ function makeDevinElicitationQuestion(
   const header = trimmedString(schema.title) ?? "Question";
   const title = trimmedString(property.title) ?? id;
   const question = trimmedString(property.description) ?? title;
+  const allowOther = devinElicitationAllowsOther(request);
 
   switch (property.type) {
     case "string": {
@@ -282,6 +295,7 @@ function makeDevinElicitationQuestion(
             mappedOptions.valuesByLabel,
             mappedOptions.allowedValues,
             property.default,
+            allowOther,
           ),
       };
     }
@@ -337,6 +351,7 @@ function makeDevinElicitationQuestion(
             mappedOptions.valuesByLabel,
             mappedOptions.allowedValues,
             property.default,
+            allowOther,
           ),
       };
     }
@@ -412,7 +427,7 @@ function makeDevinUrlElicitationPrompt(
       },
     ],
     makeResponse: (answers) => {
-      const answer = normalizeStringAnswer(answers[id], new Map(), new Set(), undefined);
+      const answer = normalizeStringAnswer(answers[id], new Map(), new Set(), undefined, true);
       if (answer === "Done") {
         return { action: { action: "accept" } };
       }

@@ -527,6 +527,9 @@ it.layer(devinAdapterTestLayer)("DevinAdapterLive", (it) => {
         yield* Deferred.make<Extract<ProviderRuntimeEvent, { type: "user-input.requested" }>>();
       const resolved =
         yield* Deferred.make<Extract<ProviderRuntimeEvent, { type: "user-input.resolved" }>>();
+      const continued =
+        yield* Deferred.make<Extract<ProviderRuntimeEvent, { type: "content.delta" }>>();
+      const turnCompleted = yield* Deferred.make<void>();
 
       const eventsFiber = yield* Stream.runForEach(adapter.streamEvents, (event) => {
         if (String(event.threadId) !== String(threadId)) {
@@ -537,6 +540,15 @@ it.layer(devinAdapterTestLayer)("DevinAdapterLive", (it) => {
         }
         if (event.type === "user-input.resolved") {
           return Deferred.succeed(resolved, event).pipe(Effect.ignore);
+        }
+        if (
+          event.type === "content.delta" &&
+          event.payload.delta.includes("Devin received the answer and continued")
+        ) {
+          return Deferred.succeed(continued, event).pipe(Effect.ignore);
+        }
+        if (event.type === "turn.completed") {
+          return Deferred.succeed(turnCompleted, undefined).pipe(Effect.ignore);
         }
         return Effect.void;
       }).pipe(Effect.forkChild);
@@ -586,6 +598,9 @@ it.layer(devinAdapterTestLayer)("DevinAdapterLive", (it) => {
         q0: "Research or plan only",
       });
       assert.equal(String(resolvedEvent.turnId), String(requestedEvent.turnId));
+      const continuedEvent = yield* Deferred.await(continued);
+      assert.equal(continuedEvent.payload.streamKind, "assistant_text");
+      yield* Deferred.await(turnCompleted);
       yield* Fiber.join(sendTurnFiber);
 
       yield* Fiber.interrupt(eventsFiber);
