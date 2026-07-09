@@ -355,6 +355,7 @@ export function makeAcpAdapterLive<UserInputResponse>(
                   runtimeMode: input.runtimeMode,
                   request: params,
                   pendingApprovals,
+                  resolveToolCall: acp.getToolCallState,
                   resolveTurnId: resolveActiveTurnId,
                   makeRequestId: nextApprovalRequestId,
                   makeEventStamp,

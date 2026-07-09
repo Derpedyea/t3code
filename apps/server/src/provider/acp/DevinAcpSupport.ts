@@ -729,7 +729,7 @@ export function applyDevinRequestedMode<E>(input: {
 }): Effect.Effect<void, E> {
   const aliases =
     input.interactionMode === "plan"
-      ? ["architect", "plan"]
+      ? ["plan", "architect"]
       : input.runtimeMode === "full-access"
         ? [
             "bypass",

@@ -20,6 +20,7 @@ function makeQueuedRuntime(
     const promptStarted = yield* Deferred.make<void>();
     const contentEvent = {
       _tag: "ContentDelta",
+      streamKind: "assistant_text",
       text: input.text ?? '{"title":"Drain queued ACP text"}',
       rawPayload: { sessionId: "queued-session" },
     } satisfies AcpSessionRuntime.AcpSessionRuntimeEvent;

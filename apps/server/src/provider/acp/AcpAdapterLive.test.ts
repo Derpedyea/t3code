@@ -67,6 +67,7 @@ it.effect(
           yield* Deferred.succeed(drainEntered, undefined).pipe(Effect.ignore);
           yield* Deferred.await(releaseDrain);
         }),
+        getToolCallState: () => Effect.sync(() => undefined),
         getModeState: Effect.sync(() => undefined),
         getConfigOptions: Effect.succeed([]),
         prompt: () => Effect.succeed({ stopReason: "end_turn" as const }),
@@ -166,6 +167,7 @@ it.effect("cancels a session for a specific turn when no active turn is register
         }),
       getEvents: () => Stream.empty,
       drainEvents: Effect.void,
+      getToolCallState: () => Effect.sync(() => undefined),
       getModeState: Effect.sync(() => undefined),
       getConfigOptions: Effect.succeed([]),
       prompt: () => Effect.succeed({ stopReason: "end_turn" as const }),

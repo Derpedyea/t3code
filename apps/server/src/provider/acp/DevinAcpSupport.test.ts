@@ -412,7 +412,7 @@ describe("DevinAcpSupport", () => {
     }),
   );
 
-  it.effect("maps app plan mode to Devin architect mode", () =>
+  it.effect("maps app plan mode to Devin plan mode", () =>
     Effect.gen(function* () {
       const modeCalls: Array<string> = [];
       const runtime = {
@@ -420,6 +420,7 @@ describe("DevinAcpSupport", () => {
           currentModeId: "ask",
           availableModes: [
             { id: "ask", name: "Ask" },
+            { id: "plan", name: "Plan" },
             { id: "architect-mode", name: "Architect Mode" },
             { id: "code", name: "Code" },
           ],
@@ -438,11 +439,11 @@ describe("DevinAcpSupport", () => {
         mapError: (cause) => cause.message,
       });
 
-      expect(modeCalls).toEqual(["architect-mode"]);
+      expect(modeCalls).toEqual(["plan"]);
     }),
   );
 
-  it.effect("maps full-access runtime mode to Devin code mode", () =>
+  it.effect("maps full-access runtime mode to Devin bypass mode", () =>
     Effect.gen(function* () {
       const modeCalls: Array<string> = [];
       const runtime = {
@@ -450,7 +451,8 @@ describe("DevinAcpSupport", () => {
           currentModeId: "ask",
           availableModes: [
             { id: "ask", name: "Ask" },
-            { id: "architect", name: "Architect" },
+            { id: "plan", name: "Plan" },
+            { id: "bypass", name: "Bypass Permissions" },
             { id: "coding-mode", name: "Code Mode" },
           ],
         }),
@@ -468,7 +470,7 @@ describe("DevinAcpSupport", () => {
         mapError: (cause) => cause.message,
       });
 
-      expect(modeCalls).toEqual(["coding-mode"]);
+      expect(modeCalls).toEqual(["bypass"]);
     }),
   );
 });

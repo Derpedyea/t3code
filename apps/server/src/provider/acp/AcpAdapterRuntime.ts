@@ -33,7 +33,7 @@ import {
   makeAcpToolCallEvent,
 } from "./AcpCoreRuntimeEvents.ts";
 import type { AcpSessionRuntimeEvent } from "./AcpSessionRuntime.ts";
-import { parsePermissionRequest } from "./AcpRuntimeModel.ts";
+import { parsePermissionRequest, type AcpToolCallState } from "./AcpRuntimeModel.ts";
 
 const encodeUnknownJsonStringExit = Schema.encodeUnknownExit(Schema.UnknownFromJsonString);
 
@@ -317,6 +317,7 @@ export function forkAcpAdapterNotificationStream<
                 threadId: input.ctx.threadId,
                 turnId: notificationTurnId,
                 ...(event.itemId ? { itemId: event.itemId } : {}),
+                streamKind: event.streamKind,
                 text: event.text,
                 rawPayload: event.rawPayload,
               }),
@@ -377,6 +378,8 @@ export function handleAcpPermissionRequest<
   RStamp = never,
   EOffer = never,
   ROffer = never,
+  EResolveToolCall = never,
+  RResolveToolCall = never,
   ELog = never,
   RLog = never,
 >(input: {
@@ -385,6 +388,9 @@ export function handleAcpPermissionRequest<
   readonly runtimeMode: ProviderSession["runtimeMode"];
   readonly request: EffectAcpSchema.RequestPermissionRequest;
   readonly pendingApprovals: Map<ApprovalRequestId, AcpAdapterPendingApproval>;
+  readonly resolveToolCall?: (
+    toolCallId: string,
+  ) => Effect.Effect<AcpToolCallState | undefined, EResolveToolCall, RResolveToolCall>;
   readonly resolveTurnId: () => TurnId | undefined;
   readonly makeRequestId: Effect.Effect<ApprovalRequestId, ERequestId, RRequestId>;
   readonly makeEventStamp: () => Effect.Effect<AcpAdapterEventStamp, EStamp, RStamp>;
@@ -408,7 +414,10 @@ export function handleAcpPermissionRequest<
         };
       }
     }
-    const permissionRequest = parsePermissionRequest(input.request);
+    const previousToolCall = input.resolveToolCall
+      ? yield* input.resolveToolCall(input.request.toolCall.toolCallId)
+      : undefined;
+    const permissionRequest = parsePermissionRequest(input.request, previousToolCall);
     const requestId = yield* input.makeRequestId;
     const runtimeRequestId = RuntimeRequestId.make(requestId);
     const decision = yield* Deferred.make<ProviderApprovalDecision>();

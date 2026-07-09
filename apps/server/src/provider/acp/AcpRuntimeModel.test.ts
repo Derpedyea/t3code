@@ -421,6 +421,7 @@ describe("AcpRuntimeModel", () => {
     expect(contentResult.events).toEqual([
       {
         _tag: "ContentDelta",
+        streamKind: "assistant_text",
         text: "hello from acp",
         rawPayload: {
           sessionId: "session-1",
@@ -429,6 +430,35 @@ describe("AcpRuntimeModel", () => {
             content: {
               type: "text",
               text: "hello from acp",
+            },
+          },
+        },
+      },
+    ]);
+
+    const thoughtResult = parseSessionUpdateEvent({
+      sessionId: "session-1",
+      update: {
+        sessionUpdate: "agent_thought_chunk",
+        content: {
+          type: "text",
+          text: "thinking through the plan",
+        },
+      },
+    } satisfies EffectAcpSchema.SessionNotification);
+
+    expect(thoughtResult.events).toEqual([
+      {
+        _tag: "ContentDelta",
+        streamKind: "reasoning_text",
+        text: "thinking through the plan",
+        rawPayload: {
+          sessionId: "session-1",
+          update: {
+            sessionUpdate: "agent_thought_chunk",
+            content: {
+              type: "text",
+              text: "thinking through the plan",
             },
           },
         },
@@ -471,6 +501,54 @@ describe("AcpRuntimeModel", () => {
         kind: "execute",
         status: "pending",
         command: "cat package.json",
+      },
+    });
+  });
+
+  it("enriches sparse permission requests from prior tool-call state", () => {
+    const request = parsePermissionRequest(
+      {
+        sessionId: "session-1",
+        options: [
+          {
+            optionId: "plan_accept_edits",
+            name: "Yes, implement plan and accept edits",
+            kind: "allow_once",
+          },
+          {
+            optionId: "reject_once",
+            name: "No, plan needs changes",
+            kind: "reject_once",
+          },
+        ],
+        toolCall: {
+          toolCallId: "exit-plan-1",
+        },
+      } satisfies EffectAcpSchema.RequestPermissionRequest,
+      {
+        toolCallId: "exit-plan-1",
+        kind: "switch_mode",
+        title: "Exit plan mode",
+        status: "pending",
+        data: {
+          toolCallId: "exit-plan-1",
+          kind: "switch_mode",
+          rawInput: { plan: "## Plan\n\n1. Inspect\n2. Implement" },
+        },
+      },
+    );
+
+    expect(request).toMatchObject({
+      kind: "switch_mode",
+      detail: "Exit plan mode",
+      toolCall: {
+        toolCallId: "exit-plan-1",
+        kind: "switch_mode",
+        title: "Exit plan mode",
+        status: "pending",
+        data: {
+          rawInput: { plan: "## Plan\n\n1. Inspect\n2. Implement" },
+        },
       },
     });
   });

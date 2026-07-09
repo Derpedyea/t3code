@@ -17,6 +17,8 @@ const emitToolCalls = process.env.T3_ACP_EMIT_TOOL_CALLS === "1";
 const emitInterleavedAssistantToolCalls =
   process.env.T3_ACP_EMIT_INTERLEAVED_ASSISTANT_TOOL_CALLS === "1";
 const emitGenericToolPlaceholders = process.env.T3_ACP_EMIT_GENERIC_TOOL_PLACEHOLDERS === "1";
+const emitSparsePermissionToolCall = process.env.T3_ACP_EMIT_SPARSE_PERMISSION_TOOL_CALL === "1";
+const emitAgentThought = process.env.T3_ACP_EMIT_AGENT_THOUGHT === "1";
 const emitAskQuestion = process.env.T3_ACP_EMIT_ASK_QUESTION === "1";
 const emitXAiAskUserQuestion = process.env.T3_ACP_EMIT_XAI_ASK_USER_QUESTION === "1";
 const emitDevinAskQuestion = process.env.T3_ACP_EMIT_DEVIN_ASK_QUESTION === "1";
@@ -262,19 +264,24 @@ function availableModels(): ReadonlyArray<{
 
 const availableModes: ReadonlyArray<AcpSchema.SessionMode> = [
   {
+    id: "accept-edits",
+    name: "Code",
+    description: "Write and edit code",
+  },
+  {
     id: "ask",
     name: "Ask",
-    description: "Request permission before making any changes",
+    description: "Answer questions without code changes",
   },
   {
-    id: "architect",
-    name: "Architect",
-    description: "Design and plan software systems without implementation",
+    id: "plan",
+    name: "Plan",
+    description: "Plan changes before implementing",
   },
   {
-    id: "code",
-    name: "Code",
-    description: "Write and modify code with full tool access",
+    id: "bypass",
+    name: "Bypass Permissions",
+    description: "Auto-approve all tool calls",
   },
 ];
 
@@ -674,21 +681,25 @@ const program = Effect.gen(function* () {
 
         const permission = yield* agent.client.requestPermission({
           sessionId: requestedSessionId,
-          toolCall: {
-            toolCallId,
-            title: "`cat server/package.json`",
-            kind: "execute",
-            status: "pending",
-            content: [
-              {
-                type: "content",
-                content: {
-                  type: "text",
-                  text: "Not in allowlist: cat server/package.json",
-                },
+          toolCall: emitSparsePermissionToolCall
+            ? {
+                toolCallId,
+              }
+            : {
+                toolCallId,
+                title: "`cat server/package.json`",
+                kind: "execute",
+                status: "pending",
+                content: [
+                  {
+                    type: "content",
+                    content: {
+                      type: "text",
+                      text: "Not in allowlist: cat server/package.json",
+                    },
+                  },
+                ],
               },
-            ],
-          },
           options: [
             { optionId: permissionOptionIds.allowOnce, name: "Allow once", kind: "allow_once" },
             {
@@ -1077,6 +1088,16 @@ const program = Effect.gen(function* () {
           ],
         },
       });
+
+      if (emitAgentThought) {
+        yield* agent.client.sessionUpdate({
+          sessionId: requestedSessionId,
+          update: {
+            sessionUpdate: "agent_thought_chunk",
+            content: { type: "text", text: "thinking from mock" },
+          },
+        });
+      }
 
       yield* agent.client.sessionUpdate({
         sessionId: requestedSessionId,

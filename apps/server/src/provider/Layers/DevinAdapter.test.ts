@@ -151,7 +151,118 @@ it.layer(devinAdapterTestLayer)("DevinAdapterLive", (it) => {
     }),
   );
 
-  it.effect("maps full-access and plan turns onto Devin code and architect modes", () =>
+  it.effect("maps Devin thought chunks to reasoning text deltas", () =>
+    Effect.gen(function* () {
+      const threadId = ThreadId.make("devin-thought-chunks");
+      const wrapperPath = yield* Effect.promise(() =>
+        makeMockDevinWrapper({
+          T3_ACP_EMIT_AGENT_THOUGHT: "1",
+        }),
+      );
+      const adapter = yield* makeTestAdapter(wrapperPath);
+
+      const runtimeEvents: ProviderRuntimeEvent[] = [];
+      const turnCompleted = yield* Deferred.make<void>();
+      const runtimeEventsFiber = yield* Stream.runForEach(adapter.streamEvents, (event) =>
+        Effect.sync(() => {
+          runtimeEvents.push(event);
+        }).pipe(
+          Effect.andThen(
+            event.type === "turn.completed"
+              ? Deferred.succeed(turnCompleted, undefined)
+              : Effect.void,
+          ),
+        ),
+      ).pipe(Effect.forkChild);
+
+      yield* adapter.startSession({
+        threadId,
+        provider: ProviderDriverKind.make("devin"),
+        cwd: process.cwd(),
+        runtimeMode: "full-access",
+      });
+
+      yield* adapter.sendTurn({
+        threadId,
+        input: "think briefly",
+        attachments: [],
+      });
+
+      yield* Deferred.await(turnCompleted);
+      yield* Fiber.interrupt(runtimeEventsFiber);
+
+      const deltas = runtimeEvents.filter((event) => event.type === "content.delta");
+      assert.deepEqual(
+        deltas.map((event) => ({
+          streamKind: event.payload.streamKind,
+          delta: event.payload.delta,
+        })),
+        [
+          { streamKind: "reasoning_text", delta: "thinking from mock" },
+          { streamKind: "assistant_text", delta: "hello from mock" },
+        ],
+      );
+
+      yield* adapter.stopSession(threadId);
+    }),
+  );
+
+  it.effect("enriches sparse Devin permission requests from tool-call updates", () =>
+    Effect.gen(function* () {
+      const threadId = ThreadId.make("devin-sparse-permission");
+      const wrapperPath = yield* Effect.promise(() =>
+        makeMockDevinWrapper({
+          T3_ACP_EMIT_TOOL_CALLS: "1",
+          T3_ACP_EMIT_SPARSE_PERMISSION_TOOL_CALL: "1",
+        }),
+      );
+      const adapter = yield* makeTestAdapter(wrapperPath);
+      const requestOpened =
+        yield* Deferred.make<Extract<ProviderRuntimeEvent, { type: "request.opened" }>>();
+      const turnCompleted = yield* Deferred.make<void>();
+
+      const eventsFiber = yield* Stream.runForEach(adapter.streamEvents, (event) => {
+        if (String(event.threadId) !== String(threadId)) {
+          return Effect.void;
+        }
+        if (event.type === "request.opened") {
+          return Deferred.succeed(requestOpened, event).pipe(Effect.ignore);
+        }
+        if (event.type === "turn.completed") {
+          return Deferred.succeed(turnCompleted, undefined).pipe(Effect.ignore);
+        }
+        return Effect.void;
+      }).pipe(Effect.forkChild);
+
+      yield* adapter.startSession({
+        threadId,
+        provider: ProviderDriverKind.make("devin"),
+        cwd: process.cwd(),
+        runtimeMode: "approval-required",
+      });
+
+      const sendTurnFiber = yield* adapter
+        .sendTurn({ threadId, input: "read package metadata", attachments: [] })
+        .pipe(Effect.forkChild);
+
+      const opened = yield* Deferred.await(requestOpened);
+      assert.equal(opened.payload.requestType, "exec_command_approval");
+      assert.equal(opened.payload.detail, "cat server/package.json");
+
+      yield* adapter.respondToRequest(
+        threadId,
+        ApprovalRequestId.make(String(opened.requestId)),
+        "accept",
+      );
+
+      yield* Deferred.await(turnCompleted);
+      yield* Fiber.join(sendTurnFiber);
+      yield* Fiber.interrupt(eventsFiber);
+      yield* adapter.stopSession(threadId);
+    }),
+  );
+
+  it.effect("maps full-access and plan turns onto Devin bypass and plan modes", () =>
     Effect.gen(function* () {
       const threadId = ThreadId.make("devin-plan-mode-probe");
       const tempDir = yield* Effect.promise(() =>
@@ -188,7 +299,7 @@ it.layer(devinAdapterTestLayer)("DevinAdapterLive", (it) => {
           : [];
       });
 
-      assert.deepStrictEqual(modeValues, ["code", "architect"]);
+      assert.deepStrictEqual(modeValues, ["bypass", "plan"]);
     }),
   );
 

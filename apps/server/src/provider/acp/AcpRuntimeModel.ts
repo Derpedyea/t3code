@@ -4,6 +4,7 @@ import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 import type * as EffectAcpSchema from "effect-acp/schema";
+import type { RuntimeContentStreamKind } from "@t3tools/contracts";
 import { deriveToolActivityPresentation } from "@t3tools/shared/toolActivity";
 import type { ToolLifecycleItemType } from "@t3tools/contracts";
 
@@ -168,6 +169,7 @@ export type AcpParsedSessionEvent =
   | {
       readonly _tag: "ContentDelta";
       readonly itemId?: string;
+      readonly streamKind: RuntimeContentStreamKind;
       readonly text: string;
       readonly rawPayload: unknown;
     };
@@ -518,8 +520,9 @@ export function mergeToolCallState(
 
 export function parsePermissionRequest(
   params: EffectAcpSchema.RequestPermissionRequest,
+  previousToolCall?: AcpToolCallState,
 ): AcpPermissionRequest {
-  const toolCall = makeToolCallState(
+  const currentToolCall = makeToolCallState(
     {
       toolCallId: params.toolCall.toolCallId,
       title: params.toolCall.title,
@@ -532,7 +535,11 @@ export function parsePermissionRequest(
     },
     { fallbackStatus: "pending" },
   );
-  const kind = normalizeToolKind(params.toolCall.kind) ?? "unknown";
+  const toolCall =
+    previousToolCall && currentToolCall?.toolCallId === previousToolCall.toolCallId
+      ? mergeToolCallState(previousToolCall, currentToolCall)
+      : (currentToolCall ?? previousToolCall);
+  const kind = toolCall?.kind ?? normalizeToolKind(params.toolCall.kind) ?? "unknown";
   const detail =
     toolCall?.command ??
     toolCall?.title ??
@@ -660,6 +667,18 @@ export function parseSessionUpdateEvent(params: EffectAcpSchema.SessionNotificat
       if (upd.content.type === "text" && upd.content.text.length > 0) {
         events.push({
           _tag: "ContentDelta",
+          streamKind: "assistant_text",
+          text: upd.content.text,
+          rawPayload: params,
+        });
+      }
+      break;
+    }
+    case "agent_thought_chunk": {
+      if (upd.content.type === "text" && upd.content.text.length > 0) {
+        events.push({
+          _tag: "ContentDelta",
+          streamKind: "reasoning_text",
           text: upd.content.text,
           rawPayload: params,
         });
