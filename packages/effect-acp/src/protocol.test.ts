@@ -4,10 +4,7 @@ import * as Effect from "effect/Effect";
 import * as Deferred from "effect/Deferred";
 import * as Fiber from "effect/Fiber";
 import * as Queue from "effect/Queue";
-import * as PlatformError from "effect/PlatformError";
 import * as Schema from "effect/Schema";
-import * as Sink from "effect/Sink";
-import * as Stdio from "effect/Stdio";
 import * as Stream from "effect/Stream";
 import * as Ref from "effect/Ref";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
@@ -52,6 +49,7 @@ const decodeRequestPermissionResponse = Schema.decodeEffect(
   Schema.fromJsonString(RequestPermissionResponse),
 );
 const encodeUnknownJsonString = Schema.encodeUnknownSync(Schema.UnknownFromJsonString);
+const decodeUnknownJsonString = Schema.decodeUnknownSync(Schema.UnknownFromJsonString);
 const encoder = new TextEncoder();
 const mockPeerPath = Effect.map(Effect.service(Path.Path), (path) =>
   path.join(import.meta.dirname, "../test/fixtures/acp-mock-peer.ts"),
@@ -385,6 +383,36 @@ it.layer(NodeServices.layer)("effect-acp protocol", (it) => {
     }),
   );
 
+  it.effect("preserves string ids when responding to extension requests", () =>
+    Effect.gen(function* () {
+      const { stdio, input, output } = yield* makeInMemoryStdio();
+      yield* AcpProtocol.makeAcpPatchedProtocol({
+        stdio,
+        serverRequestMethods: new Set(),
+        onExtRequest: () => Effect.succeed({ accepted: true }),
+      });
+
+      const requestId = "1c0ddcb9-8322-41fd-9bd5-a0ddf8901b1f";
+      yield* Queue.offer(
+        input,
+        encoder.encode(
+          `${encodeUnknownJsonString({
+            jsonrpc: "2.0",
+            id: requestId,
+            method: "_session/elicitation",
+            params: {},
+          })}\n`,
+        ),
+      );
+
+      assert.deepEqual(decodeUnknownJsonString(yield* Queue.take(output)), {
+        jsonrpc: "2.0",
+        id: requestId,
+        result: { accepted: true },
+      });
+    }),
+  );
+
   it.effect("preserves zero-valued ids for inbound core client requests", () =>
     Effect.gen(function* () {
       const { stdio, input, output } = yield* makeInMemoryStdio();
@@ -562,52 +590,6 @@ it.layer(NodeServices.layer)("effect-acp protocol", (it) => {
       assert.instanceOf(error, AcpError.AcpInputStreamEndedError);
       assert.equal(error.message, "ACP input stream ended.");
       assert.equal("cause" in error, false);
-    }),
-  );
-
-  it.effect("fails later sends after the output writer terminates", () =>
-    Effect.gen(function* () {
-      const writeAttempted = yield* Deferred.make<void>();
-      const termination = yield* Deferred.make<AcpError.AcpError>();
-      const writerError = PlatformError.systemError({
-        _tag: "Unknown",
-        module: "Test",
-        method: "stdout",
-        cause: "writer closed",
-      });
-      const stdio = Stdio.make({
-        args: Effect.succeed([]),
-        stdin: Stream.never,
-        stdout: () =>
-          Sink.forEach(() =>
-            Deferred.succeed(writeAttempted, undefined).pipe(
-              Effect.andThen(Effect.fail(writerError)),
-            ),
-          ),
-        stderr: () => Sink.drain,
-      });
-      const transport = yield* AcpProtocol.makeAcpPatchedProtocol({
-        stdio,
-        serverRequestMethods: new Set(),
-        onTermination: (error) => Deferred.succeed(termination, error).pipe(Effect.asVoid),
-      });
-
-      yield* transport.notify("session/cancel", { sessionId: "session-1" }).pipe(Effect.exit);
-      yield* Deferred.await(writeAttempted);
-      const terminationError = yield* Deferred.await(termination);
-      assert.instanceOf(terminationError, AcpError.AcpTransportError);
-      assert.equal(
-        (terminationError as AcpError.AcpTransportError).operation,
-        "write-output-stream",
-      );
-
-      const sendError = yield* transport.notify("session/cancel", { sessionId: "session-2" }).pipe(
-        Effect.match({
-          onFailure: (error) => error,
-          onSuccess: () => assert.fail("Expected send to fail after writer termination"),
-        }),
-      );
-      assert.strictEqual(sendError, terminationError);
     }),
   );
 

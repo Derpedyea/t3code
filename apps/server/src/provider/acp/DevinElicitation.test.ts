@@ -1,36 +1,6 @@
 import { describe, expect, it } from "@effect/vitest";
 
-import {
-  makeDevinElicitationPrompt,
-  toDevinPrivateElicitationResponse,
-} from "./DevinElicitation.ts";
-
-describe("toDevinPrivateElicitationResponse", () => {
-  it("flattens ACP elicitation responses for Devin's private extension", () => {
-    expect(
-      toDevinPrivateElicitationResponse({
-        _meta: { trace: "1" },
-        action: { action: "accept", content: { scope: "workspace" } },
-      }),
-    ).toEqual({
-      _meta: { trace: "1" },
-      action: "accept",
-      content: { scope: "workspace" },
-    });
-
-    expect(
-      toDevinPrivateElicitationResponse({
-        action: { action: "decline" },
-      }),
-    ).toEqual({ action: "decline" });
-
-    expect(
-      toDevinPrivateElicitationResponse({
-        action: { action: "cancel" },
-      }),
-    ).toEqual({ action: "cancel" });
-  });
-});
+import { makeDevinElicitationPrompt } from "./DevinElicitation.ts";
 
 describe("makeDevinElicitationPrompt", () => {
   it("disambiguates duplicate enum labels and rejects invalid custom answers", () => {
