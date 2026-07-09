@@ -56,14 +56,37 @@ nodeServicesIt("ACP native logging", (it) => {
           payload: { prompt: secret },
         },
       });
+      yield* protocolLogger({
+        direction: "outgoing",
+        stage: "decoded",
+        payload: {
+          _tag: "Exit",
+          requestId: "req-1",
+          exit: {
+            _tag: "Success",
+            value: {
+              action: "accept",
+              content: {
+                q0: secret,
+                q1: "safe-answer",
+              },
+            },
+          },
+        },
+      });
 
       const serialized = encodeUnknownJson(records);
       assert.notInclude(serialized, secret);
+      assert.notInclude(serialized, "safe-answer");
       assert.include(serialized, '"method":"session/prompt"');
       assert.include(serialized, '"errorTag":"AcpRequestError"');
       assert.include(serialized, '"reasonCount":1');
       assert.include(serialized, '"valueType":"string"');
       assert.include(serialized, '"messageTag":"Request"');
+      assert.include(serialized, '"requestId":"req-1"');
+      assert.include(serialized, '"exitTag":"Success"');
+      assert.include(serialized, '"resultAction":"accept"');
+      assert.include(serialized, '"contentKeys":["q0","q1"]');
     }),
   );
 

@@ -13,6 +13,35 @@ function structuralMethod(value: string): string {
   return value.length <= 128 && /^[A-Za-z][A-Za-z0-9._:/-]*$/.test(value) ? value : "unknown";
 }
 
+function structuralId(value: unknown): string | undefined {
+  return typeof value === "string" && value.length <= 128 && /^[A-Za-z0-9._:/-]+$/.test(value)
+    ? value
+    : undefined;
+}
+
+function summarizeProtocolResult(value: unknown): Readonly<Record<string, unknown>> {
+  if (value === null || typeof value !== "object") {
+    return {};
+  }
+  const record = value as Record<string, unknown>;
+  let action: string | undefined;
+  if (typeof record.action === "string") {
+    action = record.action;
+  } else if (record.action !== null && typeof record.action === "object") {
+    const nestedAction = (record.action as Record<string, unknown>).action;
+    if (typeof nestedAction === "string") {
+      action = nestedAction;
+    }
+  }
+  const content = record.content;
+  return {
+    ...(action !== undefined ? { resultAction: structuralMethod(action) } : {}),
+    ...(content !== null && typeof content === "object"
+      ? { contentKeys: Object.keys(content as Record<string, unknown>).sort() }
+      : {}),
+  };
+}
+
 function summarizePayload(payload: unknown): Readonly<Record<string, unknown>> {
   if (payload === null) return { valueType: "null" };
   if (typeof payload === "string") {
@@ -30,11 +59,23 @@ function summarizePayload(payload: unknown): Readonly<Record<string, unknown>> {
 
   try {
     const record = payload as Record<string, unknown>;
+    const exit = record.exit;
+    const exitRecord =
+      exit !== null && typeof exit === "object" ? (exit as Record<string, unknown>) : undefined;
     return {
       valueType: "object",
       fieldCount: Object.keys(record).length,
       ...(typeof record._tag === "string" ? { messageTag: errorTag(record) } : {}),
       ...(typeof record.tag === "string" ? { method: structuralMethod(record.tag) } : {}),
+      ...(record._tag === "Exit" && structuralId(record.requestId) !== undefined
+        ? { requestId: structuralId(record.requestId) }
+        : {}),
+      ...(record._tag === "Exit" && typeof exitRecord?._tag === "string"
+        ? { exitTag: errorTag(exitRecord) }
+        : {}),
+      ...(record._tag === "Exit" && exitRecord?._tag === "Success"
+        ? summarizeProtocolResult(exitRecord.value)
+        : {}),
     };
   } catch {
     return { valueType: "object" };

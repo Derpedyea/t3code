@@ -88,6 +88,7 @@ export const makeAcpPatchedProtocol = Effect.fn("makeAcpPatchedProtocol")(functi
   const outgoing = yield* Queue.unbounded<string | Uint8Array, Cause.Done<void>>();
   const nextRequestId = yield* Ref.make(1n);
   const terminationHandled = yield* Ref.make(false);
+  const outgoingWriterFailure = yield* Ref.make<AcpError.AcpError | undefined>(undefined);
   const extPending = yield* Ref.make(new Map<string, AcpPendingRequest>());
 
   const logProtocol = (event: AcpProtocolLogEvent) => {
@@ -106,6 +107,11 @@ export const makeAcpPatchedProtocol = Effect.fn("makeAcpPatchedProtocol")(functi
   const offerOutgoing = Effect.fn("offerOutgoing")(function* (
     message: RpcMessage.FromClientEncoded | RpcMessage.FromServerEncoded,
   ) {
+    const writerFailure = yield* Ref.get(outgoingWriterFailure);
+    if (writerFailure !== undefined) {
+      return yield* writerFailure;
+    }
+
     yield* logProtocol({
       direction: "outgoing",
       stage: "decoded",
@@ -473,7 +479,22 @@ export const makeAcpPatchedProtocol = Effect.fn("makeAcpPatchedProtocol")(functi
     Effect.forkScoped,
   );
 
-  yield* Stream.fromQueue(outgoing).pipe(Stream.run(options.stdio.stdout()), Effect.forkScoped);
+  yield* Stream.fromQueue(outgoing).pipe(
+    Stream.run(options.stdio.stdout()),
+    Effect.matchCauseEffect({
+      onFailure: (cause) => {
+        const error = new AcpError.AcpTransportError({
+          operation: "write-output-stream",
+          cause,
+        });
+        return Ref.set(outgoingWriterFailure, error).pipe(
+          Effect.andThen(handleTermination(() => Effect.succeed(error))),
+        );
+      },
+      onSuccess: () => Effect.void,
+    }),
+    Effect.forkScoped,
+  );
 
   const clientProtocol = RpcClient.Protocol.of({
     run: (_clientId, f) =>

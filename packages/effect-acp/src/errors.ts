@@ -157,7 +157,12 @@ export class AcpTransportError extends Schema.TaggedErrorClass<AcpTransportError
   "AcpTransportError",
   {
     operation: Schema.optional(
-      Schema.Literals(["call-rpc", "read-input-stream", "read-process-exit-status"]),
+      Schema.Literals([
+        "call-rpc",
+        "read-input-stream",
+        "read-process-exit-status",
+        "write-output-stream",
+      ]),
     ),
     method: Schema.optional(Schema.String),
     detail: Schema.optional(Schema.String),

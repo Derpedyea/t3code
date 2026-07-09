@@ -26,6 +26,8 @@ const emitDevinAskQuestion = process.env.T3_ACP_EMIT_DEVIN_ASK_QUESTION === "1";
 const emitDevinCreatePlan = process.env.T3_ACP_EMIT_DEVIN_CREATE_PLAN === "1";
 const emitDevinUpdateTodos = process.env.T3_ACP_EMIT_DEVIN_UPDATE_TODOS === "1";
 const emitDevinPrivateElicitation = process.env.T3_ACP_EMIT_DEVIN_PRIVATE_ELICITATION === "1";
+const emitDevinPrivateElicitationMulti =
+  process.env.T3_ACP_EMIT_DEVIN_PRIVATE_ELICITATION_MULTI === "1";
 const emitElicitation = process.env.T3_ACP_EMIT_ELICITATION === "1";
 const emitUrlElicitationComplete = process.env.T3_ACP_EMIT_URL_ELICITATION_COMPLETE === "1";
 const emitXAiPromptCompleteThenHang = process.env.T3_ACP_EMIT_XAI_PROMPT_COMPLETE_THEN_HANG === "1";
@@ -1002,46 +1004,98 @@ const program = Effect.gen(function* () {
         return { stopReason: "end_turn" };
       }
 
-      if (emitDevinPrivateElicitation) {
+      if (emitDevinPrivateElicitation || emitDevinPrivateElicitationMulti) {
         const result = yield* agent.client.extRequest("_session/elicitation", {
           mode: "form",
           sessionId: requestedSessionId,
-          message: "What would you like Devin to do?",
-          requestedSchema: {
-            type: "object",
-            properties: {
-              q0: {
-                type: "string",
-                title: "Task",
-                description: "What would you like Devin to do?",
-                oneOf: [
-                  {
-                    const: "Build a new feature",
-                    title: "Add new functionality to the project.",
+          message: emitDevinPrivateElicitationMulti
+            ? "I need to narrow the scope before producing an actionable plan."
+            : "What would you like Devin to do?",
+          requestedSchema: emitDevinPrivateElicitationMulti
+            ? {
+                type: "object",
+                properties: {
+                  q0: {
+                    type: "string",
+                    description: "What scope of the server should become Rust?",
+                    oneOf: [
+                      { const: "Full server rewrite", title: "Port all of apps/server." },
+                      { const: "Core runtime only", title: "Rewrite the runtime core." },
+                    ],
                   },
-                  {
-                    const: "Research or plan only",
-                    title: "Explore options without changing files.",
+                  q1: {
+                    type: "string",
+                    description: "Which migration strategy should the plan assume?",
+                    oneOf: [
+                      { const: "Greenfield rewrite", title: "Build the Rust server fresh." },
+                      { const: "Module-by-module", title: "Port bounded modules gradually." },
+                    ],
                   },
-                ],
+                  q2: {
+                    type: "string",
+                    description: "How should TypeScript contracts be handled?",
+                    oneOf: [
+                      { const: "Generate Rust from schemas", title: "Use schemas as source." },
+                      { const: "Keep as a JSON boundary", title: "Serialize across the boundary." },
+                    ],
+                  },
+                  q3: {
+                    type: "string",
+                    description: "What is the Rust goal?",
+                    oneOf: [
+                      { const: "Single native binary", title: "Ship one executable." },
+                      { const: "Reliability and safety", title: "Prioritize safety." },
+                    ],
+                  },
+                },
+                required: ["q0", "q1", "q2", "q3"],
+              }
+            : {
+                type: "object",
+                properties: {
+                  q0: {
+                    type: "string",
+                    title: "Task",
+                    description: "What would you like Devin to do?",
+                    oneOf: [
+                      {
+                        const: "Build a new feature",
+                        title: "Add new functionality to the project.",
+                      },
+                      {
+                        const: "Research or plan only",
+                        title: "Explore options without changing files.",
+                      },
+                    ],
+                  },
+                },
+                required: ["q0"],
               },
-            },
-            required: ["q0"],
-          },
           _meta: {
             "cognition.ai/allowOther": true,
           },
         });
+        const resultContent =
+          typeof result === "object" && result !== null && "content" in result
+            ? result.content
+            : undefined;
+        const resultAnswers =
+          resultContent !== null && typeof resultContent === "object"
+            ? (resultContent as Record<string, unknown>)
+            : undefined;
         if (
           typeof result !== "object" ||
           result === null ||
           !("action" in result) ||
           result.action !== "accept" ||
-          !("content" in result) ||
-          typeof result.content !== "object" ||
-          result.content === null ||
-          !("q0" in result.content) ||
-          result.content.q0 !== "Research or plan only"
+          resultAnswers === undefined ||
+          !("q0" in resultAnswers) ||
+          (emitDevinPrivateElicitationMulti
+            ? resultAnswers.q0 !== "Full server rewrite" ||
+              resultAnswers.q1 !== "Greenfield rewrite" ||
+              resultAnswers.q2 !== "Generate Rust from schemas" ||
+              resultAnswers.q3 !== "Single native binary"
+            : resultAnswers.q0 !== "Research or plan only")
         ) {
           throw new Error("Unexpected private Devin elicitation response.");
         }
