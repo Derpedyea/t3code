@@ -13,7 +13,7 @@ import {
   type ProviderProbeResult,
 } from "../providerSnapshot.ts";
 
-export const buildDevinProviderSnapshot = Effect.fn("buildDevinProviderSnapshot")(function* (
+const buildDevinProviderSnapshot = Effect.fn("buildDevinProviderSnapshot")(function* (
   settings: DevinSettings,
   probe: ProviderProbeResult,
   models: ReadonlyArray<ServerProviderModel> = [],

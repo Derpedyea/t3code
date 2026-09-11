@@ -212,11 +212,23 @@ jobs:
   publish:
     needs: [prepare, verify, build]
     runs-on: ubuntu-24.04
+    timeout-minutes: 35
     permissions:
+      actions: read
       contents: write
     env:
       RELEASE_VERSION: ${{ needs.prepare.outputs.version }}
     steps:
+      - name: Require successful CI for this commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          run_id="$(gh run list --repo "$GITHUB_REPOSITORY" --workflow ci.yml --commit "$GITHUB_SHA" --limit 1 --json databaseId --jq '.[0].databaseId // empty')"
+          if [[ -z "$run_id" ]]; then
+            echo "No CI run found for $GITHUB_SHA. Push the commit to main before releasing." >&2
+            exit 1
+          fi
+          gh run watch "$run_id" --repo "$GITHUB_REPOSITORY" --exit-status --interval 30
       - uses: actions/checkout@v6
         with:
           sparse-checkout: |
