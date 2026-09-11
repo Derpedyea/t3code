@@ -42,7 +42,7 @@ jobs:
           RELEASE_VERSION: ${{ steps.version.outputs.version }}
         run: |
           tag="v$RELEASE_VERSION"
-          existing="$(gh api "repos/$GITHUB_REPOSITORY/commits/$tag" --jq .sha 2>/dev/null || true)"
+          existing="$(gh api "repos/$GITHUB_REPOSITORY/commits/$tag" --jq .sha 2>/dev/null)" || existing=""
           if [[ -z "$existing" ]]; then
             gh api --method POST "repos/$GITHUB_REPOSITORY/git/refs" -f "ref=refs/tags/$tag" -f "sha=$GITHUB_SHA"
           elif [[ "$existing" != "$GITHUB_SHA" ]]; then
