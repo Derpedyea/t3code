@@ -47,13 +47,13 @@ jobs:
           fi
           echo "version=$RELEASE_VERSION" >> "$GITHUB_OUTPUT"
           echo "channel=$channel" >> "$GITHUB_OUTPUT"
-      - uses: actions/checkout@v6
-        with:
-          persist-credentials: false
-          sparse-checkout: |
-            /*
-            !/.repos/
-          sparse-checkout-cone-mode: false
+      - name: Check out release commit without credentials
+        run: |
+          git init .
+          git remote add origin "https://github.com/$GITHUB_REPOSITORY.git"
+          git fetch --depth=1 origin "$GITHUB_SHA"
+          git sparse-checkout set --no-cone '/*' '!/.repos/'
+          git checkout --detach FETCH_HEAD
       # The deploy key also handles candidates that change workflow files.
       - name: Pin release tag
         env:
@@ -260,14 +260,13 @@ jobs:
             exit 1
           fi
           gh run watch "$run_id" --repo "$GITHUB_REPOSITORY" --exit-status --interval 30
-      - uses: actions/checkout@v6
-        with:
-          fetch-depth: 0
-          persist-credentials: false
-          sparse-checkout: |
-            /*
-            !/.repos/
-          sparse-checkout-cone-mode: false
+      - name: Check out release history without credentials
+        run: |
+          git init .
+          git remote add origin "https://github.com/$GITHUB_REPOSITORY.git"
+          git fetch origin "$GITHUB_SHA"
+          git sparse-checkout set --no-cone '/*' '!/.repos/'
+          git checkout --detach FETCH_HEAD
       - uses: voidzero-dev/setup-vp@v1
         with:
           node-version-file: package.json

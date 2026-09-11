@@ -24,14 +24,14 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 240
     steps:
-      - uses: actions/checkout@v6
-        with:
-          ref: main
-          persist-credentials: false
-          sparse-checkout: |
-            /*
-            !/.repos/
-          sparse-checkout-cone-mode: false
+      # Public clone: no stored GitHub credentials for the repair process to inherit.
+      - name: Check out fork without credentials
+        run: |
+          git init .
+          git remote add origin "https://github.com/$GITHUB_REPOSITORY.git"
+          git fetch --depth=1 origin main
+          git sparse-checkout set --no-cone '/*' '!/.repos/'
+          git checkout --detach FETCH_HEAD
       - uses: voidzero-dev/setup-vp@v1
         with:
           node-version-file: package.json

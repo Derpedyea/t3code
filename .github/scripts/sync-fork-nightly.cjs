@@ -203,15 +203,38 @@ and explain the blocker instead of inventing a workaround.`;
     await run(
       "timeout",
       [
+        "5m",
+        "npm",
+        "install",
+        "--prefix",
+        root,
+        "--ignore-scripts",
+        "--no-audit",
+        "--no-fund",
+        "opencode-ai@1.18.30",
+      ],
+      {
+        env,
+        stdio: ["ignore", transcript, transcript],
+      },
+    );
+    // npm may require explicit install-script approval even when ignore-scripts
+    // is false. Run only this pinned package's native-binary installer.
+    await run(
+      "timeout",
+      ["5m", "node", path.join(root, "node_modules", "opencode-ai", "postinstall.mjs")],
+      {
+        env,
+        stdio: ["ignore", transcript, transcript],
+      },
+    );
+    await run(
+      "timeout",
+      [
         "--signal=TERM",
         "--kill-after=15s",
         "30m",
-        "npm",
-        "exec",
-        "--yes",
-        "--package=opencode-ai@1.18.30",
-        "--",
-        "opencode",
+        path.join(root, "node_modules", ".bin", "opencode"),
         "run",
         "--agent",
         "build",
