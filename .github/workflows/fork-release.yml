@@ -1,0 +1,260 @@
+name: Fork Desktop Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Fork version, e.g. 0.0.40-derped.20260911.1"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fork-desktop-release
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    if: github.repository == 'Derpedyea/t3code'
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - id: version
+        name: Validate fork version
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: |
+          if [[ ! "$RELEASE_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+-derped\.[0-9]{8}\.[0-9]+$ ]]; then
+            echo "Use X.Y.Z-derped.YYYYMMDD.N for fork releases." >&2
+            exit 1
+          fi
+          echo "version=$RELEASE_VERSION" >> "$GITHUB_OUTPUT"
+
+  verify:
+    needs: prepare
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          sparse-checkout: |
+            /*
+            !/.repos/
+          sparse-checkout-cone-mode: false
+      - uses: voidzero-dev/setup-vp@v1
+        with:
+          node-version-file: package.json
+          cache: true
+          run-install: true
+      - name: Typecheck affected workspaces
+        run: vp run --concurrency-limit 2 --filter t3 --filter @t3tools/web --filter @t3tools/mobile --filter effect-acp --filter @t3tools/contracts --filter @t3tools/shared typecheck
+      - name: Test provider settings and Devin ACP
+        run: |
+          vp test run \
+            apps/web/src/components/settings/*.test.ts* \
+            apps/web/src/components/chat/composerProviderState.test.tsx \
+            apps/web/src/components/chat/ModelPickerContent.test.ts \
+            apps/web/src/modelSelection.test.ts \
+            apps/mobile/src/lib/modelOptions.test.ts \
+            apps/mobile/src/lib/providerOptions.test.ts \
+            apps/server/src/provider/{Drivers,Layers,acp}/Devin*.test.ts \
+            apps/server/src/provider/Layers/ProviderRegistry.test.ts \
+            apps/server/src/serverSettings.test.ts \
+            packages/effect-acp/src
+
+  wsl_node_pty:
+    needs: prepare
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          sparse-checkout: |
+            /*
+            !/.repos/
+          sparse-checkout-cone-mode: false
+      - uses: voidzero-dev/setup-vp@v1
+        with:
+          node-version-file: package.json
+          cache: true
+          run-install: |
+            args:
+              - --filter=t3...
+      - name: Build the Windows WSL backend's Linux terminal binary
+        run: |
+          pty_pkg="$(node -e "console.log(require.resolve('node-pty/package.json', { paths: ['./apps/server'] }))")"
+          pty_dir="$(dirname "$pty_pkg")"
+          (cd "$pty_dir" && npx --yes node-gyp rebuild)
+          mkdir -p wsl-prebuild
+          cp "$pty_dir/build/Release/pty.node" wsl-prebuild/pty.node
+      - uses: actions/upload-artifact@v7
+        with:
+          name: fork-wsl-node-pty
+          path: wsl-prebuild/pty.node
+          if-no-files-found: error
+
+  build:
+    needs: [prepare, wsl_node_pty]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 75
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            platform: linux
+            target: AppImage
+            arch: x64
+            rust_target: x86_64-unknown-linux-gnu
+          - runner: windows-2025
+            platform: win
+            target: nsis
+            arch: x64
+            rust_target: x86_64-pc-windows-msvc
+          - runner: macos-15
+            platform: mac
+            target: dmg
+            arch: arm64
+            rust_target: aarch64-apple-darwin
+          - runner: macos-15-intel
+            platform: mac
+            target: dmg
+            arch: x64
+            rust_target: x86_64-apple-darwin
+    env:
+      T3CODE_DESKTOP_UPDATE_REPOSITORY: ${{ github.repository }}
+      RELEASE_VERSION: ${{ needs.prepare.outputs.version }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          sparse-checkout: |
+            /*
+            !/.repos/
+          sparse-checkout-cone-mode: false
+      - uses: voidzero-dev/setup-vp@v1
+        with:
+          node-version-file: package.json
+          cache: ${{ matrix.platform != 'win' }}
+          run-install: false
+      - name: Install desktop dependencies
+        run: vp install --frozen-lockfile --filter=@t3tools/desktop... --filter=t3... --filter=@t3tools/scripts...
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust_target }}
+      - name: Install Linux build libraries
+        if: matrix.platform == 'linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libsecret-1-dev pkg-config imagemagick
+      - name: Install Spectre-mitigated MSVC libraries
+        if: matrix.platform == 'win'
+        shell: pwsh
+        run: |
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $installPath = & $vswhere -products * -latest -property installationPath
+          $setupExe = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\setup.exe"
+          $proc = Start-Process -FilePath $setupExe `
+            -ArgumentList "modify", "--installPath", "`"$installPath`"", "--add", `
+            "Microsoft.VisualStudio.Component.VC.Runtimes.x86.x64.Spectre", "--quiet", "--norestart" `
+            -Wait -PassThru -NoNewWindow
+          if ($null -eq $proc -or $proc.ExitCode -notin @(0, 3010)) {
+            throw "Visual Studio Installer failed: $($proc.ExitCode)"
+          }
+      - name: Download WSL terminal binary
+        if: matrix.platform == 'win'
+        uses: actions/download-artifact@v8
+        with:
+          name: fork-wsl-node-pty
+          path: wsl-prebuild
+      - name: Align bundled package versions
+        shell: bash
+        run: node scripts/update-release-package-versions.ts "$RELEASE_VERSION"
+      - name: Build unsigned desktop package
+        shell: bash
+        env:
+          BUILD_PLATFORM: ${{ matrix.platform }}
+          BUILD_TARGET: ${{ matrix.target }}
+          BUILD_ARCH: ${{ matrix.arch }}
+        run: |
+          args=(--platform "$BUILD_PLATFORM" --target "$BUILD_TARGET" --arch "$BUILD_ARCH" --build-version "$RELEASE_VERSION" --verbose)
+          if [[ "$BUILD_PLATFORM" == "win" ]]; then
+            args+=(--wsl-prebuild "$GITHUB_WORKSPACE/wsl-prebuild/pty.node")
+          fi
+          vp run dist:desktop:artifact "${args[@]}"
+      - name: Collect installers and updater metadata
+        shell: bash
+        env:
+          BUILD_PLATFORM: ${{ matrix.platform }}
+          BUILD_ARCH: ${{ matrix.arch }}
+        run: |
+          mkdir -p release-publish
+          shopt -s nullglob
+          files=(release/*.dmg release/*.zip release/*.AppImage release/*.exe release/*.blockmap release/*.yml)
+          if ((${#files[@]} == 0)); then
+            echo "No desktop artifacts were produced." >&2
+            exit 1
+          fi
+          cp "${files[@]}" release-publish/
+          if [[ "$BUILD_PLATFORM" == "mac" && "$BUILD_ARCH" == "x64" ]]; then
+            for manifest in release-publish/*-mac.yml; do
+              mv "$manifest" "${manifest%.yml}-x64.yml"
+            done
+          fi
+      - uses: actions/upload-artifact@v7
+        with:
+          name: fork-desktop-${{ matrix.platform }}-${{ matrix.arch }}
+          path: release-publish/*
+          if-no-files-found: error
+
+  publish:
+    needs: [prepare, verify, build]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    env:
+      RELEASE_VERSION: ${{ needs.prepare.outputs.version }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          sparse-checkout: |
+            /*
+            !/.repos/
+          sparse-checkout-cone-mode: false
+      - uses: voidzero-dev/setup-vp@v1
+        with:
+          node-version-file: package.json
+          cache: true
+          run-install: |
+            args:
+              - --filter=@t3tools/scripts...
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: fork-desktop-*
+          merge-multiple: true
+          path: release-assets
+      - name: Merge macOS updater manifests
+        run: node scripts/merge-update-manifests.ts --platform mac release-assets/latest-mac.yml release-assets/latest-mac-x64.yml
+      - name: Prepare release notes and checksums
+        run: |
+          rm release-assets/latest-mac-x64.yml
+          (cd release-assets && sha256sum * > SHA256SUMS)
+          cat > release-notes.md <<EOF
+          Personal fork build from commit $GITHUB_SHA, with grouped provider settings and Devin ACP support.
+
+          Downloads: Linux x64 AppImage, Windows x64 installer, and macOS Apple Silicon / Intel DMGs and update ZIPs.
+
+          These builds are unsigned. They bundle their own server and check Derpedyea/t3code for desktop updates. This release does not publish the upstream npm package or include upstream T3 Connect cloud credentials; use the local server or pair directly with your own server.
+          EOF
+      - uses: softprops/action-gh-release@v3
+        with:
+          tag_name: v${{ needs.prepare.outputs.version }}
+          target_commitish: ${{ github.sha }}
+          name: T3 Code (Derped fork) ${{ needs.prepare.outputs.version }}
+          body_path: release-notes.md
+          prerelease: true
+          make_latest: false
+          files: release-assets/*
+          fail_on_unmatched_files: true
