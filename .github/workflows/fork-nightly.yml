@@ -1,0 +1,51 @@
+name: Sync Upstream Nightly
+
+on:
+  schedule:
+    - cron: "7,22,37,52 * * * *"
+  workflow_dispatch:
+    inputs:
+      retry:
+        description: Retry the latest nightly even if it was already attempted
+        type: boolean
+        default: false
+
+permissions:
+  actions: write
+  contents: read
+
+concurrency:
+  group: fork-nightly-sync
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    if: github.repository == 'Derpedyea/t3code'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: main
+          persist-credentials: false
+      - uses: voidzero-dev/setup-vp@v1
+        with:
+          node-version-file: package.json
+          run-install: false
+      # Keep the running orchestrator outside the merge and the agent's edits.
+      - name: Sync, check, repair if needed, and release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FORK_SYNC_SSH_KEY: ${{ secrets.FORK_SYNC_SSH_KEY }}
+          RETRY_NIGHTLY: ${{ inputs.retry }}
+        run: |
+          cp .github/scripts/sync-fork-nightly.cjs "$RUNNER_TEMP/sync-fork-nightly.cjs"
+          node "$RUNNER_TEMP/sync-fork-nightly.cjs"
+      - name: Retain failure and repair logs
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: nightly-repair-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/fork-nightly-logs
+          if-no-files-found: ignore
+          retention-days: 14

@@ -1,6 +1,7 @@
 name: CI
 
 on:
+  workflow_dispatch:
   pull_request:
   push:
     branches:
@@ -104,7 +105,7 @@ jobs:
           sudo apt-get update && sudo apt-get install -y libsecret-1-dev pkg-config
 
       - name: Test nightly release checks
-        run: node --test .github/scripts/check-nightly-release.test.cjs
+        run: node --test .github/scripts/check-nightly-release.test.cjs .github/scripts/sync-fork-nightly.test.cjs
 
       - name: Test
         run: vp run --parallel --concurrency-limit 4 --filter '!t3' --filter '!@t3tools/monorepo' test
