@@ -18,8 +18,50 @@ const provider: ServerProvider = {
 };
 
 describe("getProviderSummary", () => {
+  it.each([
+    { state: "ready", overrides: {}, headline: "Authenticated", status: "ready" },
+    { state: "error", overrides: { status: "error" }, headline: "Unavailable", status: "error" },
+    {
+      state: "warning",
+      overrides: { status: "warning" },
+      headline: "Needs attention",
+      status: "warning",
+    },
+    {
+      state: "disabled",
+      overrides: { status: "disabled" },
+      headline: "Disabled",
+      status: "disabled",
+    },
+    {
+      state: "disabled with a stale ready status",
+      overrides: { enabled: false },
+      headline: "Disabled",
+      status: "disabled",
+    },
+    { state: "missing", overrides: { installed: false }, headline: "Not found", status: "error" },
+    {
+      state: "unauthenticated",
+      overrides: { auth: { status: "unauthenticated" } },
+      headline: "Not authenticated",
+      status: "warning",
+    },
+  ] as const)(
+    "keeps $state status accurate when hiding the subscription label",
+    ({ overrides, headline, status }) => {
+      expect(
+        getProviderSummary({ ...provider, ...overrides }, { includeAuthLabel: false }),
+      ).toMatchObject({ headline, status });
+    },
+  );
+
+  it("includes the subscription label by default", () => {
+    expect(getProviderSummary(provider).headline).toBe("Authenticated · ChatGPT");
+  });
+
   it("reports ready providers with unknown authentication as available", () => {
     expect(getProviderSummary({ ...provider, auth: { status: "unknown" } })).toEqual({
+      status: "ready",
       headline: "Available",
       detail: null,
     });
@@ -33,6 +75,7 @@ describe("getProviderSummary", () => {
         message: "The provider process failed to start.",
       }),
     ).toEqual({
+      status: "error",
       headline: "Unavailable",
       detail: "The provider process failed to start.",
     });
@@ -46,6 +89,7 @@ describe("getProviderSummary", () => {
         message: "The provider version is unsupported.",
       }),
     ).toEqual({
+      status: "warning",
       headline: "Needs attention",
       detail: "The provider version is unsupported.",
     });
@@ -60,6 +104,7 @@ describe("getProviderSummary", () => {
         message: "Run codex login.",
       }),
     ).toEqual({
+      status: "warning",
       headline: "Not authenticated",
       detail: "Run codex login.",
     });
