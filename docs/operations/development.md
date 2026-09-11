@@ -91,6 +91,11 @@ Runtime-discovered entrypoints and dependency exceptions belong in [knip.jsonc](
 
 ## Desktop artifacts
 
+To keep an installed copy's state separate, set `T3CODE_HOME` for its server data and
+`T3CODE_DESKTOP_USER_DATA_DIR` to an absolute path for its Electron profile. Keep
+`XDG_CONFIG_HOME` and `XDG_DATA_HOME` pointed at the user's normal directories so
+child CLIs such as `gh` and Devin can find their existing credentials.
+
 Local artifact builds are unsigned by default and write to `release/`:
 
 ```sh

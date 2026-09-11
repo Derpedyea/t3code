@@ -146,6 +146,31 @@ const withIdentity = <A, E, R>(
 };
 
 describe("DesktopAppIdentity", () => {
+  it.effect("isolates the Electron profile without changing CLI configuration roots", () =>
+    withIdentity(
+      Effect.gen(function* () {
+        const identity = yield* DesktopAppIdentity.DesktopAppIdentity;
+        const environment = yield* DesktopEnvironment.DesktopEnvironment;
+        assert.equal(yield* identity.resolveUserDataPath, "/profiles/nightly");
+        assert.equal(environment.appDataDirectory, "/config");
+        assert.equal(environment.linuxApplicationsDir, "/data/applications");
+        assert.equal(environment.stateDir, "/state/nightly/userdata");
+      }),
+      {
+        environment: {
+          platform: "linux",
+          env: {
+            T3CODE_HOME: "/state/nightly",
+            T3CODE_DESKTOP_USER_DATA_DIR: " /profiles/nightly ",
+            XDG_CONFIG_HOME: "/config",
+            XDG_DATA_HOME: "/data",
+          },
+        },
+        legacyPathExists: true,
+      },
+    ),
+  );
+
   it.effect("keeps using the legacy userData path when it already exists", () =>
     withIdentity(
       Effect.gen(function* () {

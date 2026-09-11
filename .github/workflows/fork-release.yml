@@ -79,10 +79,13 @@ jobs:
           cache: true
           run-install: true
       - name: Typecheck affected workspaces
-        run: vp run --concurrency-limit 2 --filter t3 --filter @t3tools/web --filter @t3tools/mobile --filter effect-acp --filter @t3tools/contracts --filter @t3tools/shared typecheck
-      - name: Test provider settings and Devin ACP
+        run: vp run --concurrency-limit 2 --filter t3 --filter @t3tools/web --filter @t3tools/mobile --filter @t3tools/desktop --filter effect-acp --filter @t3tools/contracts --filter @t3tools/shared typecheck
+      - name: Test provider settings, Devin ACP, and desktop identity
         run: |
           vp test run \
+            apps/desktop/src/app/DesktopAppIdentity.test.ts \
+            apps/desktop/src/app/DesktopEnvironment.test.ts \
+            apps/desktop/src/app/DesktopClerk.test.ts \
             apps/web/src/components/settings/*.test.ts* \
             apps/web/src/components/chat/composerProviderState.test.tsx \
             apps/web/src/components/chat/ModelPickerContent.test.ts \
