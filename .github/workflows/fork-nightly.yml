@@ -28,6 +28,10 @@ jobs:
         with:
           ref: main
           persist-credentials: false
+          sparse-checkout: |
+            /*
+            !/.repos/
+          sparse-checkout-cone-mode: false
       - uses: voidzero-dev/setup-vp@v1
         with:
           node-version-file: package.json

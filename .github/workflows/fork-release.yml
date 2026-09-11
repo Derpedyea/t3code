@@ -50,6 +50,10 @@ jobs:
       - uses: actions/checkout@v6
         with:
           persist-credentials: false
+          sparse-checkout: |
+            /*
+            !/.repos/
+          sparse-checkout-cone-mode: false
       # The deploy key also handles candidates that change workflow files.
       - name: Pin release tag
         env:
