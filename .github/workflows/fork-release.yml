@@ -19,6 +19,8 @@ jobs:
   prepare:
     if: github.repository == 'Derpedyea/t3code'
     runs-on: ubuntu-24.04
+    permissions:
+      contents: write
     outputs:
       version: ${{ steps.version.outputs.version }}
     steps:
@@ -32,6 +34,21 @@ jobs:
             exit 1
           fi
           echo "version=$RELEASE_VERSION" >> "$GITHUB_OUTPUT"
+      # Pin the commit before main moves; GitHub restricts creating release tags
+      # for older commits whose workflow files differ from the default branch.
+      - name: Pin release tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          tag="v$RELEASE_VERSION"
+          existing="$(gh api "repos/$GITHUB_REPOSITORY/commits/$tag" --jq .sha 2>/dev/null || true)"
+          if [[ -z "$existing" ]]; then
+            gh api --method POST "repos/$GITHUB_REPOSITORY/git/refs" -f "ref=refs/tags/$tag" -f "sha=$GITHUB_SHA"
+          elif [[ "$existing" != "$GITHUB_SHA" ]]; then
+            echo "$tag already points to a different commit. Use a new version." >&2
+            exit 1
+          fi
 
   verify:
     needs: prepare
