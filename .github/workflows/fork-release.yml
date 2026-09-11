@@ -266,7 +266,7 @@ jobs:
           target_commitish: ${{ github.sha }}
           name: T3 Code (Derped fork) ${{ needs.prepare.outputs.version }}
           body_path: release-notes.md
-          prerelease: true
-          make_latest: false
+          prerelease: false
+          make_latest: true
           files: release-assets/*
           fail_on_unmatched_files: true
