@@ -192,7 +192,7 @@ jobs:
         run: |
           mkdir -p release-publish
           shopt -s nullglob
-          files=(release/*.dmg release/*.zip release/*.AppImage release/*.exe release/*.blockmap release/*.yml)
+          files=(release/*.dmg release/*.zip release/*.AppImage release/*.exe release/*.blockmap release/latest*.yml)
           if ((${#files[@]} == 0)); then
             echo "No desktop artifacts were produced." >&2
             exit 1
