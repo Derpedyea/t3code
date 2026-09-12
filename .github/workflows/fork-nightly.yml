@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       retry:
-        description: Retry the latest nightly even if it was already attempted
+        description: Rebuild the latest nightly even if it was already published
         type: boolean
         default: false
 
@@ -22,7 +22,7 @@ jobs:
   sync:
     if: github.repository == 'Derpedyea/t3code'
     runs-on: ubuntu-24.04
-    timeout-minutes: 240
+    timeout-minutes: 360
     steps:
       # Public clone: no stored GitHub credentials for the repair process to inherit.
       - name: Check out fork without credentials

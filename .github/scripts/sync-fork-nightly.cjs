@@ -16,19 +16,30 @@ function latestNightly(releases) {
     .sort((a, b) => Date.parse(b.published_at) - Date.parse(a.published_at))[0];
 }
 
-// One repair budget covers merging, CI, and packaging together. A second failure
-// leaves the last published release in place and requires an explicit retry.
+function publishedNightly(releases, tag) {
+  return releases.some(
+    (release) =>
+      !release.draft &&
+      release.published_at &&
+      release.body?.includes(`Upstream nightly: \`${tag}\``),
+  );
+}
+
+class WorkflowStartError extends Error {}
+
+// Bound each run, but let the next schedule retry an unpublished nightly.
+// Merge, CI, and packaging can each expose a different integration problem.
 async function buildNightly({ merge, repair, check, release }) {
-  let repaired = false;
-  async function repairOnce(error) {
-    if (repaired) throw error;
-    repaired = true;
-    await repair(error);
+  let repairs = 0;
+  async function repairFailure(error) {
+    if (error instanceof WorkflowStartError || repairs === 3) throw error;
+    repairs += 1;
+    await repair(error, repairs);
   }
   try {
     await merge();
   } catch (error) {
-    await repairOnce(error);
+    await repairFailure(error);
   }
   for (;;) {
     try {
@@ -36,9 +47,25 @@ async function buildNightly({ merge, repair, check, release }) {
       await release();
       return;
     } catch (error) {
-      await repairOnce(error);
+      await repairFailure(error);
     }
   }
+}
+
+// A branch that never changes cannot dispatch a previous revision after repair.
+// Wait for run visibility separately; GitHub may take time to expose a dispatch.
+async function startWorkflow({ branch, sha, publish, dispatch, listRuns, sleep }) {
+  const ref = `${branch}-${sha}`;
+  await publish(ref);
+  await dispatch(ref);
+  for (let attempt = 0; attempt < 120; attempt++) {
+    const found = (await listRuns(ref)).find((run) => run.head_sha === sha);
+    if (found) return found;
+    await sleep();
+  }
+  throw new WorkflowStartError(
+    `GitHub did not start the workflow on ${ref}. The next schedule will retry.`,
+  );
 }
 
 function command(program, args, options = {}) {
@@ -106,30 +133,29 @@ function gitWithKey(refspec, dir) {
 async function workflowRun(workflow, branch, inputs, logs) {
   const sha = git("rev-parse", "HEAD");
   const started = Date.now() - 5000;
-  command(
-    "gh",
-    [
-      "api",
-      `repos/${FORK}/actions/workflows/${workflow}/dispatches`,
-      "--method",
-      "POST",
-      "--input",
-      "-",
-    ],
-    {
-      input: JSON.stringify({ ref: branch, inputs }),
-    },
-  );
-  let found;
-  for (let attempt = 0; attempt < 24; attempt++) {
-    const runs = api(
-      `repos/${FORK}/actions/workflows/${workflow}/runs?event=workflow_dispatch&branch=${encodeURIComponent(branch)}&per_page=20`,
-    ).workflow_runs;
-    found = runs.find((run) => run.head_sha === sha && Date.parse(run.created_at) >= started);
-    if (found) break;
-    await new Promise((resolve) => setTimeout(resolve, 5000));
-  }
-  if (!found) throw new Error(`GitHub did not start ${workflow} on ${branch}.`);
+  const found = await startWorkflow({
+    branch,
+    sha,
+    publish: (ref) => push(`HEAD:refs/heads/${ref}`),
+    dispatch: (ref) =>
+      command(
+        "gh",
+        [
+          "api",
+          `repos/${FORK}/actions/workflows/${workflow}/dispatches`,
+          "--method",
+          "POST",
+          "--input",
+          "-",
+        ],
+        { input: JSON.stringify({ ref, inputs }) },
+      ),
+    listRuns: (ref) =>
+      api(
+        `repos/${FORK}/actions/workflows/${workflow}/runs?event=workflow_dispatch&branch=${encodeURIComponent(ref)}&per_page=100`,
+      ).workflow_runs.filter((run) => Date.parse(run.created_at) >= started),
+    sleep: () => new Promise((resolve) => setTimeout(resolve, 5000)),
+  });
   summary(`[${workflow}](${found.html_url}) — ${sha}`);
   try {
     await run("gh", [
@@ -156,8 +182,8 @@ async function workflowRun(workflow, branch, inputs, logs) {
   }
 }
 
-async function repair(error, logs, tag) {
-  summary(`Starting one OpenCode repair with ${MODEL}: ${error.message}`);
+async function repair(error, logs, tag, attempt) {
+  summary(`Starting OpenCode repair ${attempt}/3 with ${MODEL}: ${error.message}`);
   const before = git("rev-parse", "HEAD");
   const protectedPaths = [
     ".github/scripts/sync-fork-nightly.cjs",
@@ -198,7 +224,7 @@ create PRs, or change credentials. Leave the edits uncommitted for the orchestra
 Use targeted tests for the affected behavior; CI will run the full suite afterward.
 If this needs unavailable credentials, a different model, or a product decision, stop
 and explain the blocker instead of inventing a workaround.`;
-  const transcript = fs.openSync(path.join(logs, "repair.jsonl"), "w");
+  const transcript = fs.openSync(path.join(logs, `repair-${attempt}.jsonl`), "w");
   try {
     await run(
       "timeout",
@@ -253,7 +279,7 @@ and explain the blocker instead of inventing a workaround.`;
     fs.closeSync(transcript);
     fs.rmSync(root, { recursive: true, force: true });
   }
-  const events = fs.readFileSync(path.join(logs, "repair.jsonl"), "utf8").split("\n");
+  const events = fs.readFileSync(path.join(logs, `repair-${attempt}.jsonl`), "utf8").split("\n");
   if (events.some((line) => line.startsWith('{"type":"error"'))) {
     throw new Error("OpenCode reported an error; see the repair transcript artifact.");
   }
@@ -291,10 +317,11 @@ async function main() {
   const nightly = latestNightly(api(`repos/${UPSTREAM}/releases?per_page=100`));
   if (!nightly) throw new Error("No published upstream nightly found.");
   const tag = nightly.tag_name;
-  const marker = `refs/tags/fork-nightly-attempts/${tag}`;
-  const attempted = git("ls-remote", `https://github.com/${FORK}.git`, marker);
-  if (attempted && process.env.RETRY_NIGHTLY !== "true") {
-    summary(`${tag} was already attempted. Use Run workflow → Retry to try it again.`);
+  if (
+    process.env.RETRY_NIGHTLY !== "true" &&
+    publishedNightly(api(`repos/${FORK}/releases?per_page=100`), tag)
+  ) {
+    summary(`${tag} is already published successfully.`);
     return;
   }
   if (!process.env.FORK_SYNC_SSH_KEY)
@@ -309,9 +336,6 @@ async function main() {
   git("config", "user.email", "41898282+github-actions[bot]@users.noreply.github.com");
   git("fetch", `https://github.com/${UPSTREAM}.git`, `refs/tags/${tag}`);
   const upstreamSha = git("rev-parse", "FETCH_HEAD^{commit}");
-  // Claim before doing expensive work, including conflicts which cannot be
-  // pushed as a commit. Scheduled runs never retry a claimed nightly implicitly.
-  if (!attempted) push(`HEAD:${marker}`);
   summary(`Integrating [${tag}](${nightly.html_url}) (${upstreamSha}) on ${branch}.`);
   await buildNightly({
     merge: () => {
@@ -325,10 +349,9 @@ async function main() {
         throw new Error(`Merge failed; read ${path.join(logs, "failure.txt")}.`, { cause: error });
       }
     },
-    repair: (error) => repair(error, logs, tag),
+    repair: (error, attempt) => repair(error, logs, tag, attempt),
     check: async () => {
       git("merge-base", "--is-ancestor", upstreamSha, "HEAD");
-      push(`HEAD:refs/heads/${branch}`);
       await workflowRun("ci.yml", branch, {}, logs);
     },
     release: async () => {
@@ -340,7 +363,7 @@ async function main() {
   });
 }
 
-module.exports = { latestNightly, buildNightly };
+module.exports = { latestNightly, publishedNightly, buildNightly, startWorkflow };
 if (require.main === module) {
   main().catch((error) => {
     summary(`Nightly sync stopped: ${error.message}`);
