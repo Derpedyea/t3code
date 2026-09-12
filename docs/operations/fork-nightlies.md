@@ -12,13 +12,15 @@ Actions token cannot push changes to workflow files. The built-in token dispatch
 CI runs; no personal GitHub token or paid model key is required.
 
 If a merge, check, or build fails, a temporary runner invokes OpenCode with
-`opencode/muse-spark-1.3-contributor-free`. There is one repair attempt, limited to 30 minutes
-and 80 agent steps, followed by fresh CI. The agent receives neither the deploy key nor the
+`opencode/muse-spark-1.3-contributor-free`. Each run allows up to three repair attempts, each limited
+to 30 minutes and 80 agent steps, followed by fresh CI on a branch tied to that commit. The agent receives neither the deploy key nor the
 GitHub token. It cannot edit the sync workflow or running orchestrator. The last published
 release remains available if the repair fails.
 
-To retry a failed nightly, open **Actions → Sync Upstream Nightly → Run workflow** and enable
-**Retry**. Scheduled runs deliberately skip previously attempted tags, including failures,
-to prevent an endless repair loop. Failure logs and the repair transcript are retained as
+Failed nightlies retry automatically on subsequent schedules. Only a published release
+counts as complete; a failed attempt or draft release does not stop later retries. CI startup
+timeouts leave code alone and retry on the next schedule. To start a retry sooner, open
+**Actions → Sync Upstream Nightly → Run workflow**. Enable **Retry** only to rebuild a nightly
+that has already been published. Failure logs and each repair transcript are retained as
 workflow artifacts for 14 days. To pause syncing, disable that workflow in Actions. To revoke
 its write access, remove the nightly deploy key under repository **Settings → Deploy keys**.
