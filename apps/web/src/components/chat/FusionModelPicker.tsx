@@ -4,7 +4,7 @@ import { Button } from "../ui/button";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { DevinIcon } from "../Icons";
 import { composerFloatingLayerProps } from "./composerEventScope";
-import { findFusionLeadPairing } from "./fusionModelPicker";
+import { findFusionLeadPairing } from "./fusionModelOptions";
 import { FusionWave } from "./FusionWave";
 import type { ModelEsque } from "./providerIconUtils";
 

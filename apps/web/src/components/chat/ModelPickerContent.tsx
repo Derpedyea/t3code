@@ -11,7 +11,7 @@ import { memo, useMemo, useState, useCallback, useEffect, useLayoutEffect, useRe
 import { ChevronRightIcon, SearchIcon, StarIcon } from "lucide-react";
 import { DevinIcon } from "../Icons";
 import { FusionModelPicker } from "./FusionModelPicker";
-import { collapseFusionModels } from "./fusionModelPicker";
+import { collapseFusionModels } from "./fusionModelOptions";
 import { ModelListRow } from "./ModelListRow";
 import { ModelPickerSidebar } from "./ModelPickerSidebar";
 import { getProviderStatusMessage, hasProviderSetup } from "./ProviderStatusBanner";

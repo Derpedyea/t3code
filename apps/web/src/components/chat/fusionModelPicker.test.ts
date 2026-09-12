@@ -1,6 +1,6 @@
 import { ProviderInstanceId } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
-import { collapseFusionModels, findFusionLeadPairing } from "./fusionModelPicker";
+import { collapseFusionModels, findFusionLeadPairing } from "./fusionModelOptions";
 
 const instanceId = ProviderInstanceId.make("devin-work");
 const otherInstanceId = ProviderInstanceId.make("devin-personal");
