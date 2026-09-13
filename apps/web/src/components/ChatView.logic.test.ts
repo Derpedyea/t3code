@@ -1424,7 +1424,7 @@ describe("resolveComposerProviderSelection", () => {
     expect(getAntigravitySendBlockReason(provider, "gpt-model")).toBeNull();
   });
 
-  it.each(["antigravity", "devin"])(
+  it.each(["antigravity", "devin", "test-account-provider"])(
     "keeps a missing %s instance pinned to its account",
     (driver) => {
       const missingInstanceId = ProviderInstanceId.make(`${driver}_work`);

@@ -1,4 +1,5 @@
 import {
+  resolveProviderModelPolicy,
   ANTIGRAVITY_DEFAULT_MODEL,
   DEFAULT_TEXT_GENERATION_MODEL,
   DEFAULT_TEXT_GENERATION_MODEL_BY_PROVIDER,
@@ -98,8 +99,9 @@ function appendUnavailableDynamicModelSelection(
   provider: ProviderDriverKind,
   selectedModel: string | null | undefined,
   hiddenModels: ReadonlyArray<string>,
+  modelPolicy: ServerProvider["modelPolicy"],
 ): AppModelOption[] {
-  if (provider !== "opencode" && provider !== "antigravity" && provider !== "devin") return options;
+  if (!modelPolicy?.preserveUnavailableModels) return options;
   const slug = normalizeCustomModelSlug(selectedModel);
   if (!slug) return options;
   if (provider === "antigravity" && slug === ANTIGRAVITY_DEFAULT_MODEL) return options;
@@ -223,6 +225,9 @@ function getAppModelOptions(
     provider,
     selectedModel,
     preferences.hiddenModels,
+    resolveProviderModelPolicy(
+      providers.find((entry) => entry.instanceId === defaultInstanceId) ?? { driver: provider },
+    ),
   );
 }
 
@@ -271,6 +276,7 @@ export function getAppModelOptionsForInstance(
     entry.driverKind,
     selectedModel,
     preferences.hiddenModels,
+    resolveProviderModelPolicy(entry.snapshot),
   );
 }
 
@@ -310,9 +316,7 @@ export function resolveAppModelSelectionForInstance(
   }
   if (
     resolutionOptions?.preserveUnavailableSelection &&
-    (entry.driverKind === "opencode" ||
-      entry.driverKind === "antigravity" ||
-      entry.driverKind === "devin")
+    resolveProviderModelPolicy(entry.snapshot).preserveUnavailableModels
   ) {
     const unavailableSelection = normalizeCustomModelSlug(selectedModel);
     const hiddenModels = readInstanceModelPreferences(settings, entry.instanceId).hiddenModels;
@@ -436,6 +440,7 @@ export function resolveAppModelSelectionState(
       provider,
       model,
       models: entry.models,
+      modelPolicy: resolveProviderModelPolicy(entry.snapshot),
       modelOptions: selectedEntry ? selection.options : undefined,
       planModeEnabled: settings.planModeEnabled,
     });

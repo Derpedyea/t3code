@@ -35,6 +35,11 @@ export const buildDevinProviderSnapshot = Effect.fn("buildDevinProviderSnapshot"
       probe,
     }),
     supportsTextGeneration: false,
+    modelPolicy: {
+      catalogScope: "instance" as const,
+      preserveUnavailableModels: true,
+      optionSelection: "exact" as const,
+    },
   };
 });
 

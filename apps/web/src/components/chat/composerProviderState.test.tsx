@@ -491,19 +491,29 @@ describe("provider traits render guards", () => {
   });
 });
 
-it("preserves unavailable Devin thinking and speed choices for provider validation", () => {
+it("preserves exact catalog options for an unknown driver", () => {
   const modelOptions = selections(["reasoningEffort", "max"], ["fastMode", true]);
   const models = modelWith([
     selectDescriptor("reasoningEffort", [{ id: "high", label: "High", isDefault: true }]),
   ]);
   const state = getComposerProviderState({
-    provider: ProviderDriverKind.make("devin"),
+    provider: ProviderDriverKind.make("test-account-provider"),
+    modelPolicy: { optionSelection: "exact" },
     model: MODEL,
     models,
     modelOptions,
     planModeEnabled: false,
   });
   expect(state.modelOptionsForDispatch).toEqual(modelOptions);
+  const defaultState = getComposerProviderState({
+    provider: ProviderDriverKind.make("test-account-provider"),
+    modelPolicy: { optionSelection: "exact" },
+    model: MODEL,
+    models: modelWith([{ id: "fastMode", label: "Fast", type: "boolean", currentValue: true }]),
+    modelOptions: undefined,
+    planModeEnabled: false,
+  });
+  expect(defaultState.modelOptionsForDispatch).toBeUndefined();
   const descriptors = getProviderOptionDescriptors({
     caps: models[0]!.capabilities!,
     selections: modelOptions,

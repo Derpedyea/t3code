@@ -135,6 +135,7 @@ export const makeAntigravityProvider = Effect.fn("makeAntigravityProvider")(func
 ) {
   const checkedAt = DateTime.formatIso(yield* DateTime.now);
   const initialDraft = {
+    modelPolicy: { catalogScope: "instance" as const, preserveUnavailableModels: true },
     ...buildServerProvider({
       presentation: { displayName: "Antigravity", showInteractionModeToggle: false },
       enabled: settings.enabled,

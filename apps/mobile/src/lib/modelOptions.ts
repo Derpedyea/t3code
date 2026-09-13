@@ -1,6 +1,8 @@
+import { resolveProviderModelPolicy } from "@t3tools/contracts";
 import type {
   ModelCapabilities,
   ModelSelection,
+  ServerProvider,
   ServerConfig as T3ServerConfig,
 } from "@t3tools/contracts";
 import {
@@ -19,6 +21,8 @@ export type ModelOption = {
   readonly isLegacy: boolean;
   readonly isUnavailable?: boolean;
   readonly capabilities: ModelCapabilities | null;
+  readonly modelPolicy?: ServerProvider["modelPolicy"];
+  readonly fusion?: ServerProvider["models"][number]["fusion"];
   readonly selection: ModelSelection;
 };
 
@@ -72,10 +76,9 @@ export function getModelSelectionUnavailableReason(
   const provider = config.providers.find(
     (candidate) => candidate.instanceId === selection.instanceId,
   );
-  const driver =
-    provider?.driver ?? config.settings?.providerInstances[selection.instanceId]?.driver;
+  const instanceConfig = config.settings?.providerInstances[selection.instanceId];
   if (
-    (driver === "antigravity" || driver === "devin") &&
+    resolveProviderModelPolicy(provider ?? instanceConfig).catalogScope === "instance" &&
     (!provider ||
       !provider.enabled ||
       !provider.installed ||
@@ -83,7 +86,10 @@ export function getModelSelectionUnavailableReason(
       provider.availability === "unavailable" ||
       !provider.models.some((model) => model.slug === selection.model))
   ) {
-    const name = driver === "devin" ? "Devin" : "Antigravity";
+    const name = (provider?.driver ?? instanceConfig?.driver ?? selection.instanceId).replace(
+      /^./,
+      (letter) => letter.toUpperCase(),
+    );
     return `${name} model unavailable. Set up ${name} on web or desktop, or choose another model.`;
   }
   return null;
@@ -97,7 +103,7 @@ export function isModelSelectionUnavailable(
 }
 
 /**
- * Keep Antigravity and Devin selections when setup or catalog changes make them
+ * Keep instance-catalog selections when setup or catalog changes make them
  * unavailable. Other providers fall through to the server default when they
  * are disabled, missing, or signed out. Without config, keep stored selections.
  */
@@ -111,9 +117,10 @@ export function resolveSelectableModelSelection(
   const provider = config.providers.find(
     (candidate) => candidate.instanceId === selection.instanceId,
   );
-  const driver =
-    provider?.driver ?? config.settings?.providerInstances[selection.instanceId]?.driver;
-  if (driver === "antigravity" || driver === "devin") {
+  if (
+    resolveProviderModelPolicy(provider ?? config.settings?.providerInstances[selection.instanceId])
+      .catalogScope === "instance"
+  ) {
     return selection;
   }
   return provider &&
@@ -125,7 +132,7 @@ export function resolveSelectableModelSelection(
 }
 
 /**
- * Reject legacy models for implicit defaults, except Antigravity and Devin selections,
+ * Reject legacy models for implicit defaults, except instance-catalog selections,
  * which must not silently change after a catalog update. Explicit picks in
  * the settings sheet are unaffected.
  */
@@ -139,8 +146,7 @@ export function resolveDefaultableModelSelection(
   }
   const provider = config.providers.find((candidate) => candidate.instanceId === usable.instanceId);
   const model = provider?.models.find((candidate) => candidate.slug === usable.model);
-  return provider?.driver !== "antigravity" &&
-    provider?.driver !== "devin" &&
+  return resolveProviderModelPolicy(provider).catalogScope !== "instance" &&
     model?.isLegacy === true
     ? null
     : usable;
@@ -173,8 +179,7 @@ export function buildModelOptions(
       !provider.enabled ||
       !provider.installed ||
       provider.auth.status === "unauthenticated" ||
-      ((provider.driver === "antigravity" || provider.driver === "devin") &&
-        provider.availability === "unavailable")
+      provider.availability === "unavailable"
     ) {
       continue;
     }
@@ -184,14 +189,18 @@ export function buildModelOptions(
       const key = `${provider.instanceId}:${model.slug}`;
       options.set(key, {
         key,
-        label: model.name,
-        subtitle: model.subProvider ?? "",
+        label: model.fusion ? "Fusion" : model.name,
+        subtitle: model.fusion
+          ? `${model.fusion.lead.name} + ${model.fusion.sidekick.name}`
+          : (model.subProvider ?? ""),
+        fusion: model.fusion,
         providerKey: provider.instanceId,
         providerLabel,
         providerDriver: provider.driver,
         isDefault: model.isDefault === true,
         isLegacy: model.isLegacy === true,
         capabilities: model.capabilities,
+        modelPolicy: resolveProviderModelPolicy(provider),
         selection: normalizeSelectionOptions(
           {
             instanceId: provider.instanceId,
@@ -210,7 +219,7 @@ export function buildModelOptions(
       options.set(key, {
         ...existing,
         selection:
-          existing.providerDriver === "antigravity" || existing.providerDriver === "devin"
+          existing.modelPolicy?.catalogScope === "instance"
             ? fallbackModelSelection
             : normalizeSelectionOptions(fallbackModelSelection, existing.capabilities),
       });
@@ -242,6 +251,7 @@ export function buildModelOptions(
           ? { isUnavailable: true }
           : {}),
         capabilities: model?.capabilities ?? null,
+        modelPolicy: resolveProviderModelPolicy(provider ?? instanceConfig),
         selection: fallbackModelSelection,
       });
     }

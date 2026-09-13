@@ -1,4 +1,5 @@
 import {
+  resolveProviderModelPolicy,
   ANTIGRAVITY_DEFAULT_MODEL,
   type ProviderInstanceId,
   type ProviderDriverKind,
@@ -51,6 +52,7 @@ import {
 import { providerModelKey, sortProviderModelItems } from "../../modelOrdering";
 
 type ModelPickerItem = {
+  isFusionGroup?: boolean;
   fusion?: ModelEsque["fusion"];
   slug: string;
   name: string;
@@ -95,9 +97,7 @@ export function shouldIncludeModelPickerOption(input: {
   if (isProviderInstancePickerReady(input.entry)) return true;
   return (
     input.entry.enabled &&
-    (input.entry.driverKind === "opencode" ||
-      input.entry.driverKind === "antigravity" ||
-      input.entry.driverKind === "devin") &&
+    resolveProviderModelPolicy(input.entry.snapshot).preserveUnavailableModels === true &&
     input.entry.instanceId === input.activeInstanceId &&
     input.option.slug === input.activeModel &&
     input.option.isUnavailable === true
@@ -951,7 +951,7 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
                     if (!model) {
                       return null;
                     }
-                    if (model.fusion && model.name === "Fusion") {
+                    if (model.fusion && model.isFusionGroup) {
                       const isFavorite = favoritesSet.has(
                         providerModelKey(model.instanceId, model.slug),
                       );

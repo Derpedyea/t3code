@@ -22,7 +22,7 @@ export function collapseFusionModels<T extends ModelEsque & { instanceId: Provid
               !entry.isUnavailable,
           )
         : undefined;
-    return [{ ...(active ?? model), name: "Fusion", shortName: "Fusion" }];
+    return [{ ...(active ?? model), name: "Fusion", shortName: "Fusion", isFusionGroup: true }];
   });
 }
 

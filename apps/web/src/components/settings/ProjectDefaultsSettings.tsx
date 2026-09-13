@@ -198,6 +198,7 @@ export function ProjectDefaultsSettings({ category }: { category: ProjectSetting
                   {!mixedModel ? (
                     <TraitsPicker
                       provider={activeEntry.driverKind}
+                      modelPolicy={activeEntry.snapshot.modelPolicy}
                       models={activeEntry.models}
                       model={selection.model}
                       prompt=""

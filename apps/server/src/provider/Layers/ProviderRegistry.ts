@@ -23,6 +23,7 @@
  * @module ProviderRegistryLive
  */
 import {
+  resolveProviderModelPolicy,
   defaultInstanceIdForDriver,
   ProviderDriverKind,
   type ProviderInstanceId,
@@ -101,18 +102,18 @@ export function upsertProviderWorkspaceSnapshot(
 const shouldRetainMissingProviderModels = (provider: ServerProvider): boolean => {
   const isAntigravity = provider.driver === ProviderDriverKind.make("antigravity");
   const isCodex = provider.driver === ProviderDriverKind.make("codex");
-  const isDevin = provider.driver === ProviderDriverKind.make("devin");
+  const isInstanceCatalog = resolveProviderModelPolicy(provider).catalogScope === "instance";
   if (
     !isAntigravity &&
     !isCodex &&
-    !isDevin &&
+    !isInstanceCatalog &&
     provider.driver !== ProviderDriverKind.make("opencode")
   ) {
     return true;
   }
 
   if (
-    (isAntigravity || isCodex || isDevin) &&
+    (isAntigravity || isCodex || isInstanceCatalog) &&
     (!provider.enabled || provider.auth.status === "unauthenticated")
   ) {
     return false;
@@ -153,7 +154,7 @@ const mergeProviderModels = (
   const mergedModels = nextModels.map((model) => {
     const previousModel = previousBySlug.get(model.slug);
     if (
-      provider.driver === "devin" ||
+      resolveProviderModelPolicy(provider).optionSelection === "exact" ||
       !previousModel ||
       hasModelCapabilities(model) ||
       !hasModelCapabilities(previousModel)

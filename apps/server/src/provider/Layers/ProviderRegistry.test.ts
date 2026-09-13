@@ -1066,118 +1066,123 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
         );
       });
 
-      describe.each(["antigravity", "devin"])("%s model inventories", (driver) => {
-        const previousProvider = {
-          instanceId: ProviderInstanceId.make("antigravity-personal"),
-          driver: ProviderDriverKind.make(driver),
-          status: "ready",
-          enabled: true,
-          installed: true,
-          auth: { status: "authenticated" },
-          checkedAt: "2026-09-02T00:00:00.000Z",
-          version: "0.1.3",
-          models: [
-            {
-              slug: "gemini-3.1-pro-high",
-              name: "Gemini 3.1 Pro High",
-              isCustom: false,
-              capabilities: null,
-            },
-            {
-              slug: "gemini-3-flash",
-              name: "Gemini 3 Flash",
-              isCustom: false,
-              capabilities: null,
-            },
-          ],
-          slashCommands: [],
-          skills: [],
-        } as const satisfies ServerProvider;
+      describe.each(["antigravity", "devin", "test-account-provider"])(
+        "%s model inventories",
+        (driver) => {
+          const previousProvider = {
+            instanceId: ProviderInstanceId.make("antigravity-personal"),
+            driver: ProviderDriverKind.make(driver),
+            modelPolicy:
+              driver === "test-account-provider" ? { catalogScope: "instance" } : undefined,
+            status: "ready",
+            enabled: true,
+            installed: true,
+            auth: { status: "authenticated" },
+            checkedAt: "2026-09-02T00:00:00.000Z",
+            version: "0.1.3",
+            models: [
+              {
+                slug: "gemini-3.1-pro-high",
+                name: "Gemini 3.1 Pro High",
+                isCustom: false,
+                capabilities: null,
+              },
+              {
+                slug: "gemini-3-flash",
+                name: "Gemini 3 Flash",
+                isCustom: false,
+                capabilities: null,
+              },
+            ],
+            slashCommands: [],
+            skills: [],
+          } as const satisfies ServerProvider;
 
-        it("removes unavailable models after a successful refresh", () => {
-          for (const status of ["ready", "warning"] as const) {
-            const refreshedProvider = {
+          it("removes unavailable models after a successful refresh", () => {
+            for (const status of ["ready", "warning"] as const) {
+              const refreshedProvider = {
+                ...previousProvider,
+                status,
+                checkedAt: "2026-09-02T00:01:00.000Z",
+                models: [previousProvider.models[1]],
+              } satisfies ServerProvider;
+              const afterRefresh = mergeProviderSnapshot(previousProvider, refreshedProvider);
+
+              assert.deepStrictEqual(afterRefresh.models, refreshedProvider.models);
+
+              const afterFailure = mergeProviderSnapshot(afterRefresh, {
+                ...refreshedProvider,
+                status: "error",
+                auth: { status: "unknown" },
+                models: [],
+              });
+              assert.deepStrictEqual(afterFailure.models, refreshedProvider.models);
+            }
+          });
+
+          it("keeps cached models during health checks and temporary failures", () => {
+            for (const installed of [false, true]) {
+              const pendingProvider = {
+                ...previousProvider,
+                status: driver !== "antigravity" && installed ? "error" : "warning",
+                installed,
+                auth: { status: "unknown" },
+                checkedAt: "2026-09-02T00:01:00.000Z",
+                version: installed ? previousProvider.version : null,
+                models: [],
+              } satisfies ServerProvider;
+
+              assert.deepStrictEqual(
+                mergeProviderSnapshot(previousProvider, pendingProvider).models,
+                previousProvider.models,
+              );
+            }
+
+            for (const authStatus of ["unknown", "authenticated"] as const) {
+              const failedProvider = {
+                ...previousProvider,
+                status: "error",
+                auth: { status: authStatus },
+                checkedAt: "2026-09-02T00:02:00.000Z",
+                models: [],
+              } satisfies ServerProvider;
+
+              assert.deepStrictEqual(
+                mergeProviderSnapshot(previousProvider, failedProvider).models,
+                previousProvider.models,
+              );
+            }
+          });
+
+          it("clears models after sign-out, disable, uninstall, or an empty successful refresh", () => {
+            const emptyProvider = {
               ...previousProvider,
-              status,
               checkedAt: "2026-09-02T00:01:00.000Z",
-              models: [previousProvider.models[1]],
-            } satisfies ServerProvider;
-            const afterRefresh = mergeProviderSnapshot(previousProvider, refreshedProvider);
-
-            assert.deepStrictEqual(afterRefresh.models, refreshedProvider.models);
-
-            const afterFailure = mergeProviderSnapshot(afterRefresh, {
-              ...refreshedProvider,
-              status: "error",
-              auth: { status: "unknown" },
-              models: [],
-            });
-            assert.deepStrictEqual(afterFailure.models, refreshedProvider.models);
-          }
-        });
-
-        it("keeps cached models during health checks and temporary failures", () => {
-          for (const installed of [false, true]) {
-            const pendingProvider = {
-              ...previousProvider,
-              status: driver === "devin" && installed ? "error" : "warning",
-              installed,
-              auth: { status: "unknown" },
-              checkedAt: "2026-09-02T00:01:00.000Z",
-              version: installed ? previousProvider.version : null,
               models: [],
             } satisfies ServerProvider;
+            const clearedProviders = [
+              { ...emptyProvider, status: "warning", auth: { status: "unauthenticated" } },
+              { ...emptyProvider, status: "error", auth: { status: "unauthenticated" } },
+              { ...emptyProvider, status: "disabled", enabled: false },
+              { ...emptyProvider, status: "error", enabled: false },
+              { ...emptyProvider, status: "error", installed: false, auth: { status: "unknown" } },
+              emptyProvider,
+            ] satisfies ReadonlyArray<ServerProvider>;
 
-            assert.deepStrictEqual(
-              mergeProviderSnapshot(previousProvider, pendingProvider).models,
-              previousProvider.models,
-            );
-          }
+            for (const provider of clearedProviders) {
+              const afterRemoval = mergeProviderSnapshot(previousProvider, provider);
+              assert.deepStrictEqual(afterRemoval.models, []);
 
-          for (const authStatus of ["unknown", "authenticated"] as const) {
-            const failedProvider = {
-              ...previousProvider,
-              status: "error",
-              auth: { status: authStatus },
-              checkedAt: "2026-09-02T00:02:00.000Z",
-              models: [],
-            } satisfies ServerProvider;
-
-            assert.deepStrictEqual(
-              mergeProviderSnapshot(previousProvider, failedProvider).models,
-              previousProvider.models,
-            );
-          }
-        });
-
-        it("clears models after sign-out, disable, uninstall, or an empty successful refresh", () => {
-          const emptyProvider = {
-            ...previousProvider,
-            checkedAt: "2026-09-02T00:01:00.000Z",
-            models: [],
-          } satisfies ServerProvider;
-          const clearedProviders = [
-            { ...emptyProvider, status: "warning", auth: { status: "unauthenticated" } },
-            { ...emptyProvider, status: "error", auth: { status: "unauthenticated" } },
-            { ...emptyProvider, status: "disabled", enabled: false },
-            { ...emptyProvider, status: "error", enabled: false },
-            { ...emptyProvider, status: "error", installed: false, auth: { status: "unknown" } },
-            emptyProvider,
-          ] satisfies ReadonlyArray<ServerProvider>;
-
-          for (const provider of clearedProviders) {
-            const afterRemoval = mergeProviderSnapshot(previousProvider, provider);
-            assert.deepStrictEqual(afterRemoval.models, []);
-
-            const afterFailure = mergeProviderSnapshot(afterRemoval, {
-              ...emptyProvider,
-              status: "error",
-              auth: { status: "unknown" },
-            });
-            assert.deepStrictEqual(afterFailure.models, []);
-          }
-        });
-      });
+              const afterFailure = mergeProviderSnapshot(afterRemoval, {
+                ...emptyProvider,
+                status: "error",
+                auth: { status: "unknown" },
+              });
+              assert.deepStrictEqual(afterFailure.models, []);
+            }
+          });
+        },
+      );
 
       describe("Antigravity saved account", () => {
         const signedIn = {
@@ -1337,6 +1342,17 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
           mergeProviderSnapshot(
             { ...previousProvider, driver: ProviderDriverKind.make("devin") },
             { ...refreshedProvider, driver: ProviderDriverKind.make("devin") },
+          ).models,
+          refreshedProvider.models,
+        );
+        assert.deepStrictEqual(
+          mergeProviderSnapshot(
+            { ...previousProvider, driver: ProviderDriverKind.make("test-account-provider") },
+            {
+              ...refreshedProvider,
+              driver: ProviderDriverKind.make("test-account-provider"),
+              modelPolicy: { optionSelection: "exact" },
+            },
           ).models,
           refreshedProvider.models,
         );

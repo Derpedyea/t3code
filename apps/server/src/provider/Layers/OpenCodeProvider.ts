@@ -328,6 +328,7 @@ export const makePendingOpenCodeProvider = (
 
     if (!openCodeSettings.enabled) {
       return buildServerProvider({
+        modelPolicy: { preserveUnavailableModels: true },
         presentation: OPENCODE_PRESENTATION,
         enabled: false,
         checkedAt,
@@ -346,6 +347,7 @@ export const makePendingOpenCodeProvider = (
     }
 
     return buildServerProvider({
+      modelPolicy: { preserveUnavailableModels: true },
       presentation: OPENCODE_PRESENTATION,
       enabled: true,
       checkedAt,
@@ -388,6 +390,7 @@ export const checkOpenCodeProviderStatus = Effect.fn("checkOpenCodeProviderStatu
       serverUrl: openCodeSettings.serverUrl,
     });
     return buildServerProvider({
+      modelPolicy: { preserveUnavailableModels: true },
       presentation: OPENCODE_PRESENTATION,
       enabled: openCodeSettings.enabled,
       checkedAt,
@@ -404,6 +407,7 @@ export const checkOpenCodeProviderStatus = Effect.fn("checkOpenCodeProviderStatu
 
   if (!openCodeSettings.enabled) {
     return buildServerProvider({
+      modelPolicy: { preserveUnavailableModels: true },
       presentation: OPENCODE_PRESENTATION,
       enabled: false,
       checkedAt,
@@ -459,6 +463,7 @@ export const checkOpenCodeProviderStatus = Effect.fn("checkOpenCodeProviderStatu
     }
     if (compareSemverVersions(version, MINIMUM_OPENCODE_VERSION) < 0) {
       return buildServerProvider({
+        modelPolicy: { preserveUnavailableModels: true },
         presentation: OPENCODE_PRESENTATION,
         enabled: openCodeSettings.enabled,
         checkedAt,
@@ -521,6 +526,7 @@ export const checkOpenCodeProviderStatus = Effect.fn("checkOpenCodeProviderStatu
   const skills = openCodeSkillsToServerProviderSkills(inventoryExit.value.inventory.skills);
   const connectedCount = inventoryExit.value.inventory.providerList.connected.length;
   return buildServerProvider({
+    modelPolicy: { preserveUnavailableModels: true },
     presentation: OPENCODE_PRESENTATION,
     enabled: true,
     checkedAt,

@@ -558,7 +558,7 @@ export function resolveComposerProviderSelection(input: {
     : null;
   // Missing metadata must not move account-bound history into another account.
   const requiresExactInstance =
-    (input.lockedProvider === "antigravity" || input.lockedProvider === "devin") &&
+    input.lockedProvider != null &&
     input.lockedInstanceId != null &&
     lockedContinuationGroupKey === null;
   const compatibleEntries = input.entries.filter(

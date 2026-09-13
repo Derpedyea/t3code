@@ -193,6 +193,7 @@ export function buildBooleanOptionDescriptor(input: {
 export function buildServerProvider(input: {
   driver?: ProviderDriverKind;
   presentation: ServerProviderPresentation;
+  modelPolicy?: ServerProvider["modelPolicy"];
   enabled: boolean;
   checkedAt: string;
   models: ReadonlyArray<ServerProviderModel>;
@@ -207,7 +208,7 @@ export function buildServerProvider(input: {
         checkedAt: input.checkedAt,
       })
     : undefined;
-  return {
+  const snapshot = {
     displayName: input.presentation.displayName,
     ...(input.presentation.badgeLabel ? { badgeLabel: input.presentation.badgeLabel } : {}),
     ...(typeof input.presentation.showInteractionModeToggle === "boolean"
@@ -231,7 +232,8 @@ export function buildServerProvider(input: {
     skills: [...(input.skills ?? [])],
     ...(input.probe.usageLimits ? { usageLimits: input.probe.usageLimits } : {}),
     ...(versionAdvisory ? { versionAdvisory } : {}),
-  };
+  } satisfies ServerProviderDraft;
+  return input.modelPolicy ? { ...snapshot, modelPolicy: input.modelPolicy } : snapshot;
 }
 
 export const collectStreamAsString = <E>(

@@ -9,8 +9,6 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
-import * as Stream from "effect/Stream";
-import * as SubscriptionRef from "effect/SubscriptionRef";
 import * as EffectAcpErrors from "effect-acp/errors";
 import type * as EffectAcpSchema from "effect-acp/schema";
 import { resolveSpawnCommand } from "@t3tools/shared/shell";
@@ -129,18 +127,6 @@ const readDevinModelCatalog = Effect.fn("readDevinModelCatalog")(function* (
 export const readDevinModels = (settings: DevinSettings, environment: NodeJS.ProcessEnv) =>
   readDevinModelCatalog(settings, environment).pipe(Effect.map(devinModels));
 
-function includesModel(options: ReadonlyArray<EffectAcpSchema.SessionConfigOption>, model: string) {
-  const config = options.find((option) => option.id === "model");
-  return (
-    config?.type === "select" &&
-    config.options.some((entry) =>
-      "value" in entry
-        ? entry.value === model
-        : entry.options.some((option) => option.value === model),
-    )
-  );
-}
-
 export const makeDevinAcpRuntime = Effect.fn("makeDevinAcpRuntime")(function* (
   settings: DevinSettings,
   environment: NodeJS.ProcessEnv,
@@ -158,56 +144,31 @@ export const makeDevinAcpRuntime = Effect.fn("makeDevinAcpRuntime")(function* (
       env: environment,
     },
     cancelBehavior: "wait-for-prompt",
+    modelValidation: "agent",
     clientCapabilities: {
       fs: { readTextFile: false, writeTextFile: false },
       terminal: false,
       _meta: { "cognition.ai/mcp": true, "cognition.ai/mcpWorkspaceDirs": true },
     },
   });
-  const modelUpdates = yield* SubscriptionRef.make<
-    ReadonlyArray<EffectAcpSchema.SessionConfigOption>
-  >([]);
-  yield* runtime.handleSessionUpdate((notification) =>
-    notification.update.sessionUpdate === "config_option_update"
-      ? runtime.getConfigOptions.pipe(
-          Effect.flatMap((options) => SubscriptionRef.set(modelUpdates, options)),
-        )
-      : Effect.void,
-  );
   const getCatalog = readDevinModelCatalog(settings, environment).pipe(
     Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
     Effect.timeout("10 seconds"),
     Effect.mapError((cause) => EffectAcpErrors.AcpRequestError.internalError(cause.message)),
   );
-  const setModel = Effect.fn("DevinAcpRuntime.setModel")(function* (modelId: string) {
-    yield* runtime.start();
-    if (!includesModel(yield* runtime.getConfigOptions, modelId)) {
-      // An upgrade can make the CLI catalog newer than the initial ACP config.
-      // Only wait for models the account actually offers, while consuming ACP updates.
-      const catalog = yield* getCatalog;
-      if (
-        catalog.families.some((family) =>
-          family.variants.some((variant) => variant.model_uid === modelId),
-        )
-      ) {
-        yield* SubscriptionRef.changes(modelUpdates).pipe(
-          Stream.filter((options) => includesModel(options, modelId)),
-          Stream.take(1),
-          Stream.runDrain,
-          Effect.timeoutOrElse({
-            duration: "10 seconds",
-            orElse: () =>
-              Effect.fail(
-                EffectAcpErrors.AcpRequestError.invalidParams(
-                  `Devin has not made model ${modelId} available to this session yet. Try again after refreshing provider status.`,
-                ),
-              ),
-          }),
-        );
-      }
-    }
-    return yield* runtime.setModel(modelId);
-  });
+  // ACP's cached options can omit valid Fusion IDs indefinitely. The fresh CLI
+  // catalog resolves selections; Devin's setter remains authoritative for availability.
+  const setModel = (modelId: string) =>
+    runtime.start().pipe(
+      Effect.andThen(runtime.setModel(modelId)),
+      Effect.mapError((cause) =>
+        cause.message.includes("Could not determine pairing")
+          ? EffectAcpErrors.AcpRequestError.invalidParams(
+              "Devin CLI could not resolve this Fusion pairing. Update the configured Devin CLI, then start a new thread to use the updated runtime.",
+            )
+          : cause,
+      ),
+    );
   let previousSelection: ModelSelection | undefined;
   let previousModel: string | undefined;
   return {

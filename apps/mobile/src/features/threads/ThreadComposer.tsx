@@ -501,12 +501,12 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
   const providerOptionDescriptors = useMemo(
     () =>
       resolveProviderOptionDescriptors({
-        provider: currentModelOption?.providerDriver,
+        modelPolicy: currentModelOption?.modelPolicy,
         capabilities: currentModelOption?.capabilities,
         selections: currentModelSelection.options,
       }),
     [
-      currentModelOption?.providerDriver,
+      currentModelOption?.modelPolicy,
       currentModelOption?.capabilities,
       currentModelSelection.options,
     ],

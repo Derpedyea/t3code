@@ -1,7 +1,6 @@
 import * as FileSystem from "effect/FileSystem";
 import { expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
-import * as Fiber from "effect/Fiber";
 import * as Sink from "effect/Sink";
 import * as Stream from "effect/Stream";
 import * as ChildProcessSpawner from "effect/unstable/process/ChildProcessSpawner";
@@ -54,7 +53,7 @@ it.effect("passes resolved Windows command-shim shell options to the process lau
   }),
 );
 
-it.effect("selects an account model after ACP refreshes its stale catalog", () =>
+it.effect("selects an account model even when ACP never refreshes its stale catalog", () =>
   Effect.gen(function* () {
     const h = yield* makeHarness({ T3_ACP_DEVIN: "1", T3_ACP_DEVIN_STALE_MODELS: "1" });
     const runtime = yield* makeDevinAcpRuntime(h.settings, h.environment, {
@@ -62,11 +61,7 @@ it.effect("selects an account model after ACP refreshes its stale catalog", () =
       clientInfo: { name: "t3-code-test", version: "0.0.0" },
     });
     yield* runtime.start();
-    const selection = yield* runtime
-      .setModel("devin-test-high")
-      .pipe(Effect.forkScoped({ startImmediately: true }));
-    yield* runtime.request("_test/refresh-models", {});
-    yield* Fiber.join(selection);
+    yield* runtime.setModel("devin-test-high");
     const model = (yield* runtime.getConfigOptions).find((option) => option.id === "model");
     expect(model?.currentValue).toBe("devin-test-high");
     expect(
@@ -74,6 +69,39 @@ it.effect("selects an account model after ACP refreshes its stale catalog", () =
         .filter((request) => request.method === "session/set_config_option")
         .map((request) => request.params?.value),
     ).toEqual(["devin-test-high"]);
+  }).pipe(Effect.provide(layer)),
+);
+
+it.effect("sends an unlisted Fusion ID and retains Devin's confirmed selection", () =>
+  Effect.gen(function* () {
+    const h = yield* makeHarness({ T3_ACP_DEVIN: "1" });
+    const runtime = yield* makeDevinAcpRuntime(h.settings, h.environment, {
+      cwd: h.root,
+      clientInfo: { name: "t3-code-test", version: "0.0.0" },
+    });
+    const modelId = "fusion-gpt-5-6-sol-max-sidekick-swe-2-high";
+    yield* runtime.setModel(modelId);
+    const model = (yield* runtime.getConfigOptions).find((option) => option.id === "model");
+    expect(model?.currentValue).toBe(modelId);
+    expect(
+      (yield* h.requests)
+        .filter((request) => request.method === "session/set_config_option")
+        .map((request) => request.params?.value),
+    ).toEqual([modelId]);
+  }).pipe(Effect.provide(layer)),
+);
+
+it.effect("preserves provider rejection when an unlisted model is not accepted", () =>
+  Effect.gen(function* () {
+    const h = yield* makeHarness({ T3_ACP_DEVIN: "1", T3_ACP_FAIL_SET_CONFIG_OPTION: "1" });
+    const runtime = yield* makeDevinAcpRuntime(h.settings, h.environment, {
+      cwd: h.root,
+      clientInfo: { name: "t3-code-test", version: "0.0.0" },
+    });
+    const error = yield* runtime.setModel("unavailable-fusion").pipe(Effect.flip);
+    expect(error.message).toContain("Mock invalid params");
+    const model = (yield* runtime.getConfigOptions).find((option) => option.id === "model");
+    expect(model?.currentValue).not.toBe("unavailable-fusion");
   }).pipe(Effect.provide(layer)),
 );
 

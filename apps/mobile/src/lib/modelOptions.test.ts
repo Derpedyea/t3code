@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { ProviderInstanceId, type ModelSelection, type ServerConfig } from "@t3tools/contracts";
+import {
+  ProviderDriverKind,
+  ProviderInstanceId,
+  type ModelSelection,
+  type ServerConfig,
+} from "@t3tools/contracts";
 
 import {
   buildModelOptions,
@@ -237,6 +242,29 @@ describe("mobile model options", () => {
         },
       ],
     } as unknown as ServerConfig;
+
+    it("honors an unknown driver's advertised instance catalog", () => {
+      const advertisedConfig = {
+        ...config,
+        providers: config.providers.map(
+          (provider) =>
+            ({
+              ...provider,
+              driver: ProviderDriverKind.make("test-account-provider"),
+              modelPolicy: {
+                catalogScope: "instance",
+                preserveUnavailableModels: true,
+                optionSelection: "exact",
+              },
+              models: [],
+            }) satisfies ServerConfig["providers"][number],
+        ),
+      };
+      expect(resolveSelectableModelSelection(advertisedConfig, selection)).toBe(selection);
+      const [option] = buildModelOptions(advertisedConfig, selection);
+      expect(option?.isUnavailable).toBe(true);
+      expect(option?.selection).toBe(selection);
+    });
 
     it.each([
       ["disabled", { enabled: false }],

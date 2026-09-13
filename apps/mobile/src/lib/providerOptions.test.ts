@@ -65,7 +65,7 @@ describe("mobile provider options", () => {
 
 it("keeps a removed Devin thinking choice visible until the user picks an available level", () => {
   const descriptors = resolveProviderOptionDescriptors({
-    provider: "devin",
+    modelPolicy: { optionSelection: "exact" },
     capabilities: {
       optionDescriptors: [
         {

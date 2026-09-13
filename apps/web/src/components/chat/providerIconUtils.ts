@@ -21,6 +21,7 @@ export const PROVIDER_ICON_BY_PROVIDER: Partial<Record<ProviderDriverKind, Icon>
 };
 
 export type ModelEsque = {
+  isFusionGroup?: boolean;
   fusion?: ServerProviderModel["fusion"];
   slug: string;
   name: string;
