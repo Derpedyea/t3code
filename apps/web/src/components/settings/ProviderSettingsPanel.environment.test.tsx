@@ -131,6 +131,7 @@ const environments: EnvironmentPresentation[] = [primaryId, environmentId].map((
           })
         : new RelayConnectionTarget({ environmentId: id, label: id }),
     profile: Option.none(),
+    enabled: true,
   },
   connection: { phase: "connected", error: null, traceId: null },
   serverConfig: null,
