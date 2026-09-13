@@ -10,6 +10,7 @@ import {
   ServerSettings,
   ServerSettingsPatch,
 } from "@t3tools/contracts";
+import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
 import { createModelSelection } from "@t3tools/shared/model";
 import { assert, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
@@ -1312,6 +1313,7 @@ it.layer(NodeServices.layer)("server settings", (it) => {
       const serverSettings = yield* ServerSettingsModule.ServerSettingsService;
       const legacyProject = ProjectId.make("project-legacy");
       const scriptedProject = ProjectId.make("project-scripted");
+      const noPullProject = ProjectId.make("project-no-pull");
       const script: ProjectScript = {
         id: "check",
         name: "Check",
@@ -1329,6 +1331,7 @@ it.layer(NodeServices.layer)("server settings", (it) => {
         // null override reset them; the fold must not bring them back.
         [legacyProject, modelJson, "worktree", 1, scriptsJson],
         [scriptedProject, null, null, 0, scriptsJson],
+        [noPullProject, null, null, 0, "[]"],
       ] as const) {
         yield* sql`
           INSERT INTO projection_projects (
@@ -1344,7 +1347,7 @@ it.layer(NodeServices.layer)("server settings", (it) => {
       }
       yield* fileSystem.writeFileString(
         serverConfig.settingsPath,
-        `{"projectAgentBrowserAccessOverrides":{"${legacyProject}":false},"projectAutoPullOverrides":{"${scriptedProject}":true},"projectScriptOverrides":{"${legacyProject}":null}}`,
+        `{"defaultAutoPull":true,"projectAgentBrowserAccessOverrides":{"${legacyProject}":false},"projectAutoPullOverrides":{"${scriptedProject}":true},"projectScriptOverrides":{"${legacyProject}":null}}`,
       );
 
       const settings = yield* serverSettings.getSettings;
@@ -1359,14 +1362,17 @@ it.layer(NodeServices.layer)("server settings", (it) => {
             defaultAutoPull: true,
           },
           [scriptedProject]: { defaultAutoPull: true, defaultProjectScripts: [script] },
+          [noPullProject]: { defaultAutoPull: false },
         },
       );
+      assert.isFalse(resolveProjectSettings(settings, noPullProject).settings.defaultAutoPull);
       // Derived legacy views keep older clients reading the same values.
       assert.deepEqual<ServerSettings["projectAutoPullOverrides"]>(
         settings.projectAutoPullOverrides,
         {
           [legacyProject]: true,
           [scriptedProject]: true,
+          [noPullProject]: false,
         },
       );
       assert.deepEqual<ServerSettings["projectScriptOverrides"]>(settings.projectScriptOverrides, {

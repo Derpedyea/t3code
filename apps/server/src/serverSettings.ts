@@ -478,7 +478,9 @@ function foldLegacyProjectSettings(
     if (row.defaultThreadEnvMode === "local" || row.defaultThreadEnvMode === "worktree") {
       set(row.projectId, "defaultThreadEnvMode", row.defaultThreadEnvMode);
     }
-    if (row.autoPull === 1) set(row.projectId, "defaultAutoPull", true);
+    if (row.autoPull === 0 || row.autoPull === 1) {
+      set(row.projectId, "defaultAutoPull", row.autoPull === 1);
+    }
     const scripts = decodeProjectScriptsJson(row.scripts);
     if (Option.isSome(scripts) && scripts.value.length > 0 && !resetScripts.has(row.projectId)) {
       set(row.projectId, "defaultProjectScripts", scripts.value);
