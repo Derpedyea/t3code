@@ -38,7 +38,8 @@ export const discoverDevinSkills = Effect.fn("discoverDevinSkills")(function* (
   return catalog
     .filter((skill) => skill.base_dir.length > 0)
     .map((skill): ServerProviderSkill => ({
-      name: skill.name,
+      // Devin invokes skills by their directory name, not frontmatter name.
+      name: path.basename(skill.base_dir),
       path: path.join(skill.base_dir, "SKILL.md"),
       enabled: skill.errors.length === 0,
       userInvocable: skill.triggers.includes("user"),

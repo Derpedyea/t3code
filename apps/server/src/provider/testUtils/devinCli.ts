@@ -14,7 +14,7 @@ const encodeString = Schema.encodeSync(Schema.fromJsonString(Schema.String));
 export const decodeDevinSettings = Schema.decodeSync(DevinSettings);
 export const devinTestSkills = Schema.encodeSync(DevinSkillCatalog)([
   {
-    name: "visual-check",
+    name: "Visual audit",
     display_name: "Visual check",
     description: "Check a page.",
     base_dir: "/skills/visual-check",

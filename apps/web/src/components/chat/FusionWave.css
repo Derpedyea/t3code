@@ -1,5 +1,6 @@
 .fusion-wave-packets {
-  animation: fusion-wave-flow 5s linear infinite;
+  /* Play on opening, then rest instead of repainting for the life of the editor. */
+  animation: fusion-wave-flow 5s linear;
 }
 
 .fusion-wave[data-paused="true"] .fusion-wave-packets {

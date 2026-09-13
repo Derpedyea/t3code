@@ -243,6 +243,39 @@ describe("mobile model options", () => {
       ],
     } as unknown as ServerConfig;
 
+    it("accepts advertised aliases without changing the saved model or options", () => {
+      const aliasSelection = { ...selection, model: "catalog-alias" };
+      const aliasConfig = {
+        ...config,
+        providers: config.providers.map((provider) => ({
+          ...provider,
+          models: provider.models.map((entry) => ({ ...entry, aliases: [aliasSelection.model] })),
+        })),
+      };
+      expect(getModelSelectionUnavailableReason(aliasConfig, aliasSelection)).toBeNull();
+      expect(resolveSelectableModelSelection(aliasConfig, aliasSelection)).toBe(aliasSelection);
+      expect(resolveDefaultableModelSelection(aliasConfig, aliasSelection)).toBe(aliasSelection);
+      const option = buildModelOptions(aliasConfig, aliasSelection).find(
+        (candidate) => candidate.selection.model === aliasSelection.model,
+      );
+      expect(option?.isUnavailable).not.toBe(true);
+      expect(option?.label).toBe(model.name);
+      expect(option?.capabilities).toEqual(model.capabilities);
+      expect(option?.selection).toBe(aliasSelection);
+      expect(
+        isModelSelectionUnavailable(aliasConfig, { ...selection, model: "unknown-alias" }),
+      ).toBe(true);
+      expect(
+        isModelSelectionUnavailable(
+          {
+            ...aliasConfig,
+            providers: config.providers,
+          },
+          aliasSelection,
+        ),
+      ).toBe(true);
+    });
+
     it("honors an unknown driver's advertised instance catalog", () => {
       const advertisedConfig = {
         ...config,
