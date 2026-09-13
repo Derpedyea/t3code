@@ -164,12 +164,14 @@ it.effect("refreshes account models and workspace skills and clears metadata aft
     ]);
     yield* fs.writeFileString(modelsFile, catalog);
     expect((yield* instance.snapshot.refresh).models).toEqual(snapshot.models);
-    yield* fs.writeFileString(statusFile, "Not logged in.");
-    yield* instance.snapshot.refresh;
-    const signedOut = yield* instance.snapshotForCwd(h.root);
-    expect(signedOut.auth.status).toBe("unauthenticated");
-    expect(signedOut.models.map((model) => model.slug)).toEqual(["custom-devin-model"]);
-    expect(signedOut.workspaceSnapshots).toEqual([]);
-    expect(signedOut.slashCommands.some((command) => command.name === "plan")).toBe(false);
+    for (const status of ["Unauthenticated", "Not authenticated", "Not logged in."]) {
+      yield* fs.writeFileString(statusFile, status);
+      yield* instance.snapshot.refresh;
+      const signedOut = yield* instance.snapshotForCwd(h.root);
+      expect(signedOut.auth.status).toBe("unauthenticated");
+      expect(signedOut.models.map((model) => model.slug)).toEqual(["custom-devin-model"]);
+      expect(signedOut.workspaceSnapshots).toEqual([]);
+      expect(signedOut.slashCommands.some((command) => command.name === "plan")).toBe(false);
+    }
   }).pipe(Effect.provide(driverLayer)),
 );

@@ -255,9 +255,10 @@ describe("mobile model options", () => {
       expect(getModelSelectionUnavailableReason(aliasConfig, aliasSelection)).toBeNull();
       expect(resolveSelectableModelSelection(aliasConfig, aliasSelection)).toBe(aliasSelection);
       expect(resolveDefaultableModelSelection(aliasConfig, aliasSelection)).toBe(aliasSelection);
-      const option = buildModelOptions(aliasConfig, aliasSelection).find(
-        (candidate) => candidate.selection.model === aliasSelection.model,
-      );
+      const options = buildModelOptions(aliasConfig, aliasSelection);
+      expect(options).toHaveLength(1);
+      const [option] = options;
+      expect(option?.key).toBe(`${selection.instanceId}:${model.slug}`);
       expect(option?.isUnavailable).not.toBe(true);
       expect(option?.label).toBe(model.name);
       expect(option?.capabilities).toEqual(model.capabilities);
@@ -274,6 +275,33 @@ describe("mobile model options", () => {
           aliasSelection,
         ),
       ).toBe(true);
+    });
+
+    it("prefers a direct slug over another model's alias", () => {
+      const collisionConfig = {
+        ...config,
+        providers: config.providers.map((provider) => ({
+          ...provider,
+          models: [
+            ...provider.models.map((entry) => ({
+              ...entry,
+              slug: "other-model",
+              aliases: [selection.model],
+            })),
+            ...provider.models,
+          ],
+        })),
+      };
+      const options = buildModelOptions(collisionConfig, selection);
+      expect(options).toHaveLength(2);
+      expect(
+        options.find((option) => option.key === `${selection.instanceId}:${selection.model}`)
+          ?.selection,
+      ).toBe(selection);
+      expect(
+        options.find((option) => option.key === `${selection.instanceId}:other-model`)?.selection
+          .model,
+      ).toBe("other-model");
     });
 
     it("honors an unknown driver's advertised instance catalog", () => {

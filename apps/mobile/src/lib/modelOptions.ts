@@ -217,7 +217,15 @@ export function buildModelOptions(
   }
 
   if (fallbackModelSelection) {
-    const key = `${fallbackModelSelection.instanceId}:${fallbackModelSelection.model}`;
+    const provider = config?.providers.find(
+      (candidate) => candidate.instanceId === fallbackModelSelection.instanceId,
+    );
+    const model =
+      provider?.models.find((candidate) => candidate.slug === fallbackModelSelection.model) ??
+      provider?.models.find((candidate) =>
+        candidate.aliases?.includes(fallbackModelSelection.model),
+      );
+    const key = `${fallbackModelSelection.instanceId}:${model?.slug ?? fallbackModelSelection.model}`;
     const existing = options.get(key);
     if (existing) {
       options.set(key, {
@@ -228,15 +236,7 @@ export function buildModelOptions(
             : normalizeSelectionOptions(fallbackModelSelection, existing.capabilities),
       });
     } else {
-      const provider = config?.providers.find(
-        (candidate) => candidate.instanceId === fallbackModelSelection.instanceId,
-      );
       const instanceConfig = config?.settings?.providerInstances[fallbackModelSelection.instanceId];
-      const model = provider?.models.find(
-        (candidate) =>
-          candidate.slug === fallbackModelSelection.model ||
-          candidate.aliases?.includes(fallbackModelSelection.model),
-      );
       const providerDriver =
         provider?.driver ?? instanceConfig?.driver ?? fallbackModelSelection.instanceId;
       const providerLabel = providerDisplayLabel({

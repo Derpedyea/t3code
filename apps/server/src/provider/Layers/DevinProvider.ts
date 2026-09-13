@@ -73,7 +73,7 @@ export const checkDevinProviderStatus = Effect.fn("checkDevinProviderStatus")(fu
     }
     const auth = yield* runDevinCommand(settings, environment, ["auth", "status"]);
     const output = `${auth.stdout}\n${auth.stderr}`;
-    if (/not logged in|not authenticated/i.test(output)) {
+    if (/\b(?:not logged in|not authenticated|unauthenticated)\b/i.test(output)) {
       return {
         installed: true,
         version,
@@ -83,7 +83,7 @@ export const checkDevinProviderStatus = Effect.fn("checkDevinProviderStatus")(fu
           "Run devin auth login with the configured CLI on this environment, then refresh provider status.",
       } satisfies ProviderProbeResult;
     }
-    if (auth.code === 0 && /logged in|authenticated/i.test(output)) {
+    if (auth.code === 0 && /\b(?:logged in|authenticated)\b/i.test(output)) {
       return {
         installed: true,
         version,
