@@ -97,10 +97,12 @@ jobs:
             apps/server/src/serverSettings.test.ts \
             packages/effect-acp/src
 
-  wsl_node_pty:
+  wsl_runtime:
     needs: prepare
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 30
+    env:
+      RELEASE_VERSION: ${{ needs.prepare.outputs.version }}
     steps:
       - uses: actions/checkout@v6
         with:
@@ -112,24 +114,54 @@ jobs:
         with:
           node-version-file: package.json
           cache: true
-          run-install: |
-            args:
-              - --filter=t3...
-      - name: Build the Windows WSL backend's Linux terminal binary
+          run-install: false
+      - name: Install desktop dependencies
+        run: vp install --frozen-lockfile --filter=@t3tools/desktop... --filter=t3... --filter=@t3tools/scripts...
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-gnu
+      - name: Install Linux build libraries
         run: |
-          pty_pkg="$(node -e "console.log(require.resolve('node-pty/package.json', { paths: ['./apps/server'] }))")"
-          pty_dir="$(dirname "$pty_pkg")"
-          (cd "$pty_dir" && npx --yes node-gyp rebuild)
-          mkdir -p wsl-prebuild
-          cp "$pty_dir/build/Release/pty.node" wsl-prebuild/pty.node
+          sudo apt-get update
+          sudo apt-get install -y libsecret-1-dev pkg-config imagemagick
+      - name: Align bundled package versions
+        shell: bash
+        run: node scripts/update-release-package-versions.ts "$RELEASE_VERSION"
+      - name: Build server and web bundle
+        run: vp run build:desktop
+      - name: Build resource monitor for the WSL runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo build --locked --release --manifest-path native/resource-monitor/Cargo.toml --target x86_64-unknown-linux-gnu
+          mkdir -p "$RUNNER_TEMP/cli-resource-monitor/linux-x64"
+          cp "native/resource-monitor/target/x86_64-unknown-linux-gnu/release/t3-resource-monitor" "$RUNNER_TEMP/cli-resource-monitor/linux-x64/t3-resource-monitor"
+      - name: Build Linux CLI single-executable
+        shell: bash
+        env:
+          VP_NODE_VERSION: "26.8.2"
+        run: node apps/server/scripts/cli.ts build-exe --verbose
+      - name: Build Linux CLI archive for WSL
+        shell: bash
+        run: |
+          set -euo pipefail
+          node scripts/build-cli-archive.ts \
+            --platform linux \
+            --arch x64 \
+            --version "$RELEASE_VERSION" \
+            --resource-monitor-dir "$RUNNER_TEMP/cli-resource-monitor/linux-x64" \
+            --output-dir wsl-runtime
+      - name: Smoke-test Linux CLI archive
+        shell: bash
+        run: node scripts/smoke-cli-archive.ts --archive wsl-runtime/* --expect-version "$RELEASE_VERSION"
       - uses: actions/upload-artifact@v7
         with:
-          name: fork-wsl-node-pty
-          path: wsl-prebuild/pty.node
+          name: fork-wsl-runtime
+          path: wsl-runtime/*
           if-no-files-found: error
 
   build:
-    needs: [prepare, wsl_node_pty]
+    needs: [prepare, wsl_runtime]
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 75
     strategy:
@@ -195,12 +227,12 @@ jobs:
           if ($null -eq $proc -or $proc.ExitCode -notin @(0, 3010)) {
             throw "Visual Studio Installer failed: $($proc.ExitCode)"
           }
-      - name: Download WSL terminal binary
+      - name: Download Linux CLI archive for WSL
         if: matrix.platform == 'win'
         uses: actions/download-artifact@v8
         with:
-          name: fork-wsl-node-pty
-          path: wsl-prebuild
+          name: fork-wsl-runtime
+          path: wsl-runtime
       - name: Align bundled package versions
         shell: bash
         run: node scripts/update-release-package-versions.ts "$RELEASE_VERSION"
@@ -213,7 +245,7 @@ jobs:
         run: |
           args=(--platform "$BUILD_PLATFORM" --target "$BUILD_TARGET" --arch "$BUILD_ARCH" --build-version "$RELEASE_VERSION" --verbose)
           if [[ "$BUILD_PLATFORM" == "win" ]]; then
-            args+=(--wsl-prebuild "$GITHUB_WORKSPACE/wsl-prebuild/pty.node")
+            args+=(--wsl-runtime "$GITHUB_WORKSPACE"/wsl-runtime/t3-*-linux-"$BUILD_ARCH".tar.gz)
           fi
           vp run dist:desktop:artifact "${args[@]}"
       - name: Collect installers and updater metadata
