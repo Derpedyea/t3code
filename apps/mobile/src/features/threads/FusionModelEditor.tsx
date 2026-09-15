@@ -13,9 +13,13 @@ export function FusionModelEditor(props: {
   const [selectedKey, setSelectedKey] = useState(props.initialKey);
   const [editing, setEditing] = useState<"lead" | "sidekick" | null>(null);
   const available = props.models.filter((model) => model.fusion && !model.isUnavailable);
-  const selected = available.find((model) => model.key === selectedKey) ?? available[0];
+  const selected = available.find((model) => model.key === selectedKey);
   if (!selected?.fusion) {
-    return <Text className="p-4 text-foreground-muted">No Fusion pairings available.</Text>;
+    return (
+      <Text className="p-4 text-foreground-muted">
+        This pairing is no longer available. Go back to choose another model.
+      </Text>
+    );
   }
   const pairing = selected.fusion;
   const choices = editing

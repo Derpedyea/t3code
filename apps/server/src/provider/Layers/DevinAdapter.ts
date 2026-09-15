@@ -21,6 +21,7 @@ import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import * as PubSub from "effect/PubSub";
+import * as RcMap from "effect/RcMap";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import * as Semaphore from "effect/Semaphore";
@@ -67,6 +68,8 @@ const PROVIDER = ProviderDriverKind.make("devin");
 const ResumeCursor = Schema.Struct({ sessionId: Schema.NonEmptyString });
 const isResumeCursor = Schema.is(ResumeCursor);
 type Adapter = ProviderInstance["adapter"];
+const invalidInput = (operation: keyof Adapter, issue: string) =>
+  new ProviderAdapterValidationError({ provider: PROVIDER, operation, issue });
 
 interface SessionContext {
   readonly runtime: Effect.Success<ReturnType<typeof makeDevinAcpRuntime>>;
@@ -111,7 +114,14 @@ export const makeDevinAdapter = Effect.fn("makeDevinAdapter")(function* (
   const ownerScope = yield* Effect.scope;
   const makeLoggers = yield* makeAcpNativeLoggerFactory();
   const sessions = new Map<ThreadId, SessionContext>();
-  const startLock = yield* Semaphore.make(1);
+  const lifecycleLocks = yield* RcMap.make({
+    lookup: (_threadId: ThreadId) => Semaphore.make(1),
+  });
+  const withLifecycleLock = <A, E, R>(threadId: ThreadId, effect: Effect.Effect<A, E, R>) =>
+    RcMap.get(lifecycleLocks, threadId).pipe(
+      Effect.flatMap((lock) => lock.withPermit(effect)),
+      Effect.scoped,
+    );
   const events = yield* PubSub.unbounded<ProviderRuntimeEvent>();
   const now = Effect.map(DateTime.now, DateTime.formatIso);
   const requestError = (method: string, cause: { readonly message: string }) =>
@@ -308,21 +318,17 @@ export const makeDevinAdapter = Effect.fn("makeDevinAdapter")(function* (
   });
 
   const startSession: Adapter["startSession"] = (input) =>
-    startLock.withPermit(
+    withLifecycleLock(
+      input.threadId,
       Effect.gen(function* () {
         if (input.modelSelection && input.modelSelection.instanceId !== options.instanceId) {
-          return yield* new ProviderAdapterValidationError({
-            provider: PROVIDER,
-            operation: "startSession",
-            issue: "The selected model belongs to another provider instance.",
-          });
+          return yield* invalidInput(
+            "startSession",
+            "The selected model belongs to another provider instance.",
+          );
         }
         if (input.resumeCursor !== undefined && !isResumeCursor(input.resumeCursor)) {
-          return yield* new ProviderAdapterValidationError({
-            provider: PROVIDER,
-            operation: "startSession",
-            issue: "The saved Devin session ID is invalid.",
-          });
+          return yield* invalidInput("startSession", "The saved Devin session ID is invalid.");
         }
         const resumeSessionId = isResumeCursor(input.resumeCursor)
           ? input.resumeCursor.sessionId
@@ -331,12 +337,11 @@ export const makeDevinAdapter = Effect.fn("makeDevinAdapter")(function* (
         if (previous) yield* stopContext(previous);
         yield* checkDevinExecutable(settings, options.environment).pipe(
           Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
-          Effect.timeout("10 seconds"),
           Effect.mapError((cause) => requestError("session/start", cause)),
         );
         const scope = yield* Scope.make();
         const cwd = input.cwd ?? config.cwd;
-        const started = yield* Effect.gen(function* () {
+        return yield* Effect.gen(function* () {
           const mcp = McpProviderSession.readMcpProviderSession(input.threadId);
           const environment = McpProviderSession.withAgentDeviceEnvironment(
             options.environment,
@@ -476,18 +481,16 @@ export const makeDevinAdapter = Effect.fn("makeDevinAdapter")(function* (
               : requestError("session/start", cause),
           ),
         );
-        return started;
       }),
     );
 
   const sendTurn: Adapter["sendTurn"] = Effect.fn("DevinAdapter.sendTurn")(function* (input) {
     const context = yield* requireSession(input.threadId);
     if (input.modelSelection && input.modelSelection.instanceId !== options.instanceId) {
-      return yield* new ProviderAdapterValidationError({
-        provider: PROVIDER,
-        operation: "sendTurn",
-        issue: "The selected model belongs to another provider instance.",
-      });
+      return yield* invalidInput(
+        "sendTurn",
+        "The selected model belongs to another provider instance.",
+      );
     }
     const prompt: Array<EffectAcpSchema.ContentBlock> = [];
     if (input.input?.trim()) {
@@ -505,12 +508,7 @@ export const makeDevinAdapter = Effect.fn("makeDevinAdapter")(function* (
     }
     for (const attachment of input.attachments ?? []) {
       const path = resolveAttachmentPath({ attachmentsDir: config.attachmentsDir, attachment });
-      if (!path)
-        return yield* new ProviderAdapterValidationError({
-          provider: PROVIDER,
-          operation: "sendTurn",
-          issue: `Invalid attachment '${attachment.name}'.`,
-        });
+      if (!path) return yield* invalidInput("sendTurn", `Invalid attachment '${attachment.name}'.`);
       if (attachment.type === "file") {
         prompt.push({ type: "text", text: `Attached file: ${path}` });
         continue;
@@ -527,11 +525,7 @@ export const makeDevinAdapter = Effect.fn("makeDevinAdapter")(function* (
         ),
       );
       if (bytes.length > PROVIDER_SEND_TURN_MAX_IMAGE_BYTES)
-        return yield* new ProviderAdapterValidationError({
-          provider: PROVIDER,
-          operation: "sendTurn",
-          issue: `Image '${attachment.name}' is too large.`,
-        });
+        return yield* invalidInput("sendTurn", `Image '${attachment.name}' is too large.`);
       prompt.push({
         type: "image",
         mimeType: attachment.mimeType,
@@ -539,11 +533,7 @@ export const makeDevinAdapter = Effect.fn("makeDevinAdapter")(function* (
       });
     }
     if (prompt.length === 0)
-      return yield* new ProviderAdapterValidationError({
-        provider: PROVIDER,
-        operation: "sendTurn",
-        issue: "A turn requires text or attachments.",
-      });
+      return yield* invalidInput("sendTurn", "A turn requires text or attachments.");
     // Devin expands a leading command across all text blocks. Appended context
     // can break argument-free commands and otherwise becomes part of $ARGUMENTS.
     // Join user-supplied file references with a space so they remain command arguments.
@@ -552,37 +542,36 @@ export const makeDevinAdapter = Effect.fn("makeDevinAdapter")(function* (
     let intent:
       | { readonly turnId: TurnId; readonly generation: number; settled: boolean }
       | undefined;
+    // Caller holds the turn lock through ownership checks and settlement.
     const finish = (
       payload: Extract<ProviderRuntimeEvent, { type: "turn.completed" }>["payload"],
     ) =>
-      context.lock.withPermit(
-        Effect.gen(function* () {
-          if (
-            context.stopped ||
-            !intent ||
-            intent.settled ||
-            context.generation !== intent.generation
-          )
-            return;
-          intent.settled = true;
-          context.promptFiber = undefined;
-          context.session = {
-            ...context.session,
-            activeTurnId: undefined,
-            status: payload.state === "failed" ? "error" : "ready",
-            updatedAt: yield* now,
-            lastError: payload.errorMessage,
-          };
-          yield* emit({
-            type: "turn.completed",
-            ...(yield* stamp),
-            provider: PROVIDER,
-            threadId: input.threadId,
-            turnId: intent.turnId,
-            payload,
-          });
-        }),
-      );
+      Effect.gen(function* () {
+        if (
+          context.stopped ||
+          !intent ||
+          intent.settled ||
+          context.generation !== intent.generation
+        )
+          return;
+        intent.settled = true;
+        context.promptFiber = undefined;
+        context.session = {
+          ...context.session,
+          activeTurnId: undefined,
+          status: payload.state === "failed" ? "error" : "ready",
+          updatedAt: yield* now,
+          lastError: payload.errorMessage,
+        };
+        yield* emit({
+          type: "turn.completed",
+          ...(yield* stamp),
+          provider: PROVIDER,
+          threadId: input.threadId,
+          turnId: intent.turnId,
+          payload,
+        });
+      }).pipe(Effect.uninterruptible);
     return yield* Effect.gen(function* () {
       const launch = yield* context.lock
         .withPermit(
@@ -679,31 +668,37 @@ export const makeDevinAdapter = Effect.fn("makeDevinAdapter")(function* (
         if (previousTurn === -1) context.turns.push({ id: launch.turnId, items: [result] });
         else context.turns[previousTurn] = { id: launch.turnId, items: [result] };
       }
-      yield* finish({
-        state: result.stopReason === "cancelled" ? "cancelled" : "completed",
-        stopReason: result.stopReason,
-        usage: result.usage ?? undefined,
-      });
+      yield* context.lock.withPermit(
+        finish({
+          state: result.stopReason === "cancelled" ? "cancelled" : "completed",
+          stopReason: result.stopReason,
+          usage: result.usage ?? undefined,
+        }),
+      );
       return {
         threadId: input.threadId,
         turnId: launch.turnId,
         resumeCursor: context.session.resumeCursor,
       };
     }).pipe(
-      Effect.tapError((cause) => finish({ state: "failed", errorMessage: cause.message })),
+      Effect.tapError((cause) =>
+        context.lock.withPermit(finish({ state: "failed", errorMessage: cause.message })),
+      ),
       Effect.onInterrupt(() =>
-        Effect.gen(function* () {
-          if (
-            !intent ||
-            intent.settled ||
-            context.generation !== intent.generation ||
-            context.stopped
-          )
-            return;
-          yield* cancelApprovals(context);
-          yield* Effect.ignore(context.runtime.cancel);
-          yield* finish({ state: "cancelled", stopReason: "cancelled" });
-        }),
+        context.lock.withPermit(
+          Effect.gen(function* () {
+            if (
+              !intent ||
+              intent.settled ||
+              context.generation !== intent.generation ||
+              context.stopped
+            )
+              return;
+            yield* cancelApprovals(context);
+            yield* Effect.ignore(context.runtime.cancel);
+            yield* finish({ state: "cancelled", stopReason: "cancelled" });
+          }),
+        ),
       ),
     );
   });
@@ -713,17 +708,15 @@ export const makeDevinAdapter = Effect.fn("makeDevinAdapter")(function* (
       const context = yield* requireSession(threadId);
       const pending = context.approvals.get(requestId);
       if (!pending)
-        return yield* new ProviderAdapterValidationError({
-          provider: PROVIDER,
-          operation: "respondToRequest",
-          issue: "This permission request is no longer pending.",
-        });
+        return yield* invalidInput(
+          "respondToRequest",
+          "This permission request is no longer pending.",
+        );
       if (decision !== "cancel" && !selectDevinPermissionOption(pending.request, decision))
-        return yield* new ProviderAdapterValidationError({
-          provider: PROVIDER,
-          operation: "respondToRequest",
-          issue: "Devin did not offer this permission choice.",
-        });
+        return yield* invalidInput(
+          "respondToRequest",
+          "Devin did not offer this permission choice.",
+        );
       yield* Deferred.succeed(pending.decision, decision);
     });
   const stopAll = () =>
@@ -756,14 +749,13 @@ export const makeDevinAdapter = Effect.fn("makeDevinAdapter")(function* (
       }),
     respondToUserInput: () =>
       Effect.fail(
-        new ProviderAdapterValidationError({
-          provider: PROVIDER,
-          operation: "respondToUserInput",
-          issue: "Reply to Devin's question in the conversation.",
-        }),
+        invalidInput("respondToUserInput", "Reply to Devin's question in the conversation."),
       ),
     stopSession: (threadId) =>
-      startLock.withPermit(Effect.flatMap(requireSession(threadId), stopContext)),
+      withLifecycleLock(
+        threadId,
+        Effect.suspend(() => Effect.flatMap(requireSession(threadId), stopContext)),
+      ),
     stopAll,
     listSessions: () =>
       Effect.sync(() =>
@@ -777,11 +769,10 @@ export const makeDevinAdapter = Effect.fn("makeDevinAdapter")(function* (
       Effect.map(requireSession(threadId), (context) => ({ threadId, turns: context.turns })),
     rollbackThread: () =>
       Effect.fail(
-        new ProviderAdapterValidationError({
-          provider: PROVIDER,
-          operation: "rollbackThread",
-          issue: "Devin ACP does not support conversation rewind. Start a new thread instead.",
-        }),
+        invalidInput(
+          "rollbackThread",
+          "Devin ACP does not support conversation rewind. Start a new thread instead.",
+        ),
       ),
     streamEvents: Stream.fromPubSub(events),
   } satisfies Adapter;

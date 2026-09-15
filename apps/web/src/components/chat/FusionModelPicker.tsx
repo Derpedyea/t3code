@@ -15,11 +15,8 @@ export function FusionModelPicker(props: {
   onBack: () => void;
   onSelect: (model: string) => void;
 }) {
-  const leadLabelId = useId();
-  const sidekickLabelId = useId();
-  const [selectedSlug, setSelectedSlug] = useState(() =>
-    props.models.some((model) => model.slug === props.model) ? props.model : props.models[0]?.slug,
-  );
+  const labelId = useId();
+  const [selectedSlug, setSelectedSlug] = useState(props.model);
   const selected = props.models.find((model) => model.slug === selectedSlug);
   const pairing = selected?.fusion;
   const leads = [
@@ -31,7 +28,7 @@ export function FusionModelPicker(props: {
   ];
   const sidekicks = props.models.flatMap((model) =>
     model.fusion?.lead.id === pairing?.lead.id && model.fusion
-      ? [{ ...model.fusion.sidekick, slug: model.slug }]
+      ? [{ ...model.fusion.sidekick, id: model.slug }]
       : [],
   );
 
@@ -48,60 +45,42 @@ export function FusionModelPicker(props: {
         {pairing ? (
           <div className="relative grid min-h-36 min-w-0 grid-cols-2 items-center gap-1 pr-12 pl-1 sm:gap-4 sm:pr-14 sm:pl-3">
             <FusionWave animated />
-            <div className="relative min-w-0 space-y-1">
-              <Select
-                value={pairing.lead.id}
-                onValueChange={(leadId) => {
-                  if (!leadId) return;
-                  const next = findFusionLeadPairing(props.models, leadId, pairing.sidekick.id);
-                  if (next) setSelectedSlug(next.slug);
-                }}
-              >
-                <SelectTrigger
-                  aria-labelledby={leadLabelId}
-                  variant="ghost"
-                  className="w-full min-w-0 px-1.5 text-xs font-medium text-foreground sm:text-sm"
+            {(["lead", "sidekick"] as const).map((role) => (
+              <div key={role} className="relative min-w-0 space-y-1">
+                <Select
+                  value={role === "lead" ? pairing.lead.id : selectedSlug}
+                  onValueChange={(value) => {
+                    if (!value) return;
+                    const slug =
+                      role === "lead"
+                        ? findFusionLeadPairing(props.models, value, pairing.sidekick.id)?.slug
+                        : value;
+                    if (slug) setSelectedSlug(slug);
+                  }}
                 >
-                  <SelectValue className="truncate">{pairing.lead.name}</SelectValue>
-                </SelectTrigger>
-                <SelectPopup {...composerFloatingLayerProps} data-model-picker-content="true">
-                  {leads.map((lead) => (
-                    <SelectItem key={lead.id} value={lead.id}>
-                      {lead.name}
-                    </SelectItem>
-                  ))}
-                </SelectPopup>
-              </Select>
-              <span id={leadLabelId} className="block px-2 text-xs text-muted-foreground">
-                Lead
-              </span>
-            </div>
-            <div className="relative min-w-0 space-y-1">
-              <Select
-                value={selectedSlug}
-                onValueChange={(slug) => {
-                  if (slug) setSelectedSlug(slug);
-                }}
-              >
-                <SelectTrigger
-                  aria-labelledby={sidekickLabelId}
-                  variant="ghost"
-                  className="w-full min-w-0 px-1.5 text-xs font-medium text-foreground sm:text-sm"
+                  <SelectTrigger
+                    aria-labelledby={`${labelId}-${role}`}
+                    variant="ghost"
+                    className="w-full min-w-0 px-1.5 text-xs font-medium text-foreground sm:text-sm"
+                  >
+                    <SelectValue className="truncate">{pairing[role].name}</SelectValue>
+                  </SelectTrigger>
+                  <SelectPopup {...composerFloatingLayerProps} data-model-picker-content="true">
+                    {(role === "lead" ? leads : sidekicks).map((choice) => (
+                      <SelectItem key={choice.id} value={choice.id}>
+                        {choice.name}
+                      </SelectItem>
+                    ))}
+                  </SelectPopup>
+                </Select>
+                <span
+                  id={`${labelId}-${role}`}
+                  className="block px-2 text-xs text-muted-foreground"
                 >
-                  <SelectValue className="truncate">{pairing.sidekick.name}</SelectValue>
-                </SelectTrigger>
-                <SelectPopup {...composerFloatingLayerProps} data-model-picker-content="true">
-                  {sidekicks.map((sidekick) => (
-                    <SelectItem key={sidekick.slug} value={sidekick.slug}>
-                      {sidekick.name}
-                    </SelectItem>
-                  ))}
-                </SelectPopup>
-              </Select>
-              <span id={sidekickLabelId} className="block px-2 text-xs text-muted-foreground">
-                Sidekick
-              </span>
-            </div>
+                  {role === "lead" ? "Lead" : "Sidekick"}
+                </span>
+              </div>
+            ))}
           </div>
         ) : (
           <p className="p-4 text-sm text-muted-foreground">

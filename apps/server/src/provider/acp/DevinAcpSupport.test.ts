@@ -53,33 +53,20 @@ it.effect("passes resolved Windows command-shim shell options to the process lau
   }),
 );
 
-it.effect("selects an account model even when ACP never refreshes its stale catalog", () =>
+it.effect.each([
+  { modelId: "devin-test-high", staleCatalog: true },
+  { modelId: "fusion-gpt-5-6-sol-max-sidekick-swe-2-high", staleCatalog: false },
+])("selects $modelId without relying on ACP's cached catalog", ({ modelId, staleCatalog }) =>
   Effect.gen(function* () {
-    const h = yield* makeHarness({ T3_ACP_DEVIN: "1", T3_ACP_DEVIN_STALE_MODELS: "1" });
+    const h = yield* makeHarness({
+      T3_ACP_DEVIN: "1",
+      T3_ACP_DEVIN_STALE_MODELS: staleCatalog ? "1" : "0",
+    });
     const runtime = yield* makeDevinAcpRuntime(h.settings, h.environment, {
       cwd: h.root,
       clientInfo: { name: "t3-code-test", version: "0.0.0" },
     });
-    yield* runtime.start();
-    yield* runtime.setModel("devin-test-high");
-    const model = (yield* runtime.getConfigOptions).find((option) => option.id === "model");
-    expect(model?.currentValue).toBe("devin-test-high");
-    expect(
-      (yield* h.requests)
-        .filter((request) => request.method === "session/set_config_option")
-        .map((request) => request.params?.value),
-    ).toEqual(["devin-test-high"]);
-  }).pipe(Effect.provide(layer)),
-);
-
-it.effect("sends an unlisted Fusion ID and retains Devin's confirmed selection", () =>
-  Effect.gen(function* () {
-    const h = yield* makeHarness({ T3_ACP_DEVIN: "1" });
-    const runtime = yield* makeDevinAcpRuntime(h.settings, h.environment, {
-      cwd: h.root,
-      clientInfo: { name: "t3-code-test", version: "0.0.0" },
-    });
-    const modelId = "fusion-gpt-5-6-sol-max-sidekick-swe-2-high";
+    if (staleCatalog) yield* runtime.start();
     yield* runtime.setModel(modelId);
     const model = (yield* runtime.getConfigOptions).find((option) => option.id === "model");
     expect(model?.currentValue).toBe(modelId);

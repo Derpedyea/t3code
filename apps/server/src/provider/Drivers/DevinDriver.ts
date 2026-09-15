@@ -111,7 +111,6 @@ export const DevinDriver: ProviderDriver<DevinSettings, DevinDriverEnv> = {
         discoverDevinSkills(settings, processEnv, cwd).pipe(
           Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
           Effect.provideService(Path.Path, path),
-          Effect.tap((skills) => Effect.sync(() => updateWorkspaceMetadata(cwd, { skills }))),
           Effect.mapError(
             (cause) =>
               new ProviderDriverError({
@@ -122,6 +121,23 @@ export const DevinDriver: ProviderDriver<DevinSettings, DevinDriverEnv> = {
               }),
           ),
         );
+      const refreshWorkspaceSkills = Effect.gen(function* () {
+        const results = yield* Effect.forEach(
+          [...metadataByCwd].filter(([, metadata]) => metadata.skills !== undefined),
+          ([cwd]) =>
+            probeSkills(cwd).pipe(
+              Effect.map((skills) => ({ cwd, skills })),
+              Effect.catch((cause) => Effect.logWarning(cause.message).pipe(Effect.as(undefined))),
+            ),
+          { concurrency: 4 },
+        );
+        // Apply the batch together without resurrecting evicted entries or reordering the LRU.
+        for (const result of results) {
+          if (!result) continue;
+          const metadata = metadataByCwd.get(result.cwd);
+          if (metadata) metadataByCwd.set(result.cwd, { ...metadata, skills: result.skills });
+        }
+      });
       let lastKnownModels: ReadonlyArray<ServerProviderModel> = [];
       const adapter = yield* makeDevinAdapter(settings, {
         instanceId,
@@ -217,16 +233,7 @@ export const DevinDriver: ProviderDriver<DevinSettings, DevinDriverEnv> = {
           getSnapshot,
           refresh: managed.refresh.pipe(
             Effect.tap((snapshot) =>
-              snapshot.auth.status === "authenticated"
-                ? Effect.forEach(
-                    [...metadataByCwd].filter(([, metadata]) => metadata.skills !== undefined),
-                    ([cwd]) =>
-                      probeSkills(cwd).pipe(
-                        Effect.catch((cause) => Effect.logWarning(cause.message)),
-                      ),
-                    { discard: true },
-                  )
-                : Effect.void,
+              snapshot.auth.status === "authenticated" ? refreshWorkspaceSkills : Effect.void,
             ),
             Effect.map(withWorkspaceMetadata),
           ),
@@ -240,6 +247,7 @@ export const DevinDriver: ProviderDriver<DevinSettings, DevinDriverEnv> = {
             const snapshot = yield* getSnapshot;
             if (!enabled || snapshot.auth.status !== "authenticated") return snapshot;
             const skills = yield* probeSkills(cwd);
+            updateWorkspaceMetadata(cwd, { skills });
             return {
               ...withWorkspaceMetadata(snapshot),
               skills,

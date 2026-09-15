@@ -26,7 +26,12 @@ export const DevinModelCatalog = Schema.fromJsonString(
 type Catalog = typeof DevinModelCatalog.Type;
 type Family = Catalog["families"][number];
 type Variant = Family["variants"][number];
-type SelectableFamily = Family & Pick<ServerProviderModel, "fusion">;
+type SelectableFamily = Omit<Family, "variants"> &
+  Pick<ServerProviderModel, "fusion"> & {
+    readonly variants: ReadonlyArray<
+      Variant & { readonly traits: ReturnType<typeof variantTraits> }
+    >;
+  };
 
 const THINKING_LEVEL_ORDER = [
   "none",
@@ -59,9 +64,9 @@ function variantTraits(family: Family, variant: Variant) {
   };
 }
 
-function familyVariants(family: Family) {
+function familyVariants(family: SelectableFamily) {
   const variants = family.variants.flatMap((variant) => {
-    const traits = variantTraits(family, variant);
+    const traits = variant.traits;
     return traits ? [{ ...variant, ...traits }] : [];
   });
   const combinations = new Set(
@@ -74,44 +79,55 @@ function familyVariants(family: Family) {
     1,
   );
   // Independent controls must describe a complete, unambiguous product for this account.
-  return combinations.size === variants.length && optionCount === variants.length ? variants : [];
+  return variants.length === family.variants.length &&
+    combinations.size === variants.length &&
+    optionCount === variants.length
+    ? variants
+    : undefined;
 }
 
 /** Split Fusion by known lead family and exact sidekick; retain the CLI's native IDs. */
 function selectableFamilies(catalog: Catalog): ReadonlyArray<SelectableFamily> {
+  const families = catalog.families.map((family) => ({
+    ...family,
+    variants: family.variants.map((variant) => ({
+      ...variant,
+      traits: family.slug === "fusion" ? undefined : variantTraits(family, variant),
+    })),
+  }));
   const variantsByLabel = new Map(
-    catalog.families.flatMap((family) =>
+    families.flatMap((family) =>
       family.slug === "fusion"
         ? []
         : family.variants.map((variant) => [variant.label, { family, variant }] as const),
     ),
   );
-  return catalog.families.flatMap((family) => {
+  return families.flatMap((family): SelectableFamily[] => {
     if (family.slug !== "fusion") return [family];
     const groups = new Map<string, SelectableFamily>();
-    const unfamiliar: Variant[] = [];
+    const unfamiliar: SelectableFamily["variants"][number][] = [];
     for (const variant of family.variants) {
       const pairing = /^Fusion \((.+) \+ (.+)\)$/.exec(variant.label);
       const leadLabel = pairing?.[1];
       const sidekickLabel = pairing?.[2];
-      const lead = leadLabel ? variantsByLabel.get(leadLabel)?.family : undefined;
+      const lead = leadLabel ? variantsByLabel.get(leadLabel) : undefined;
       const sidekick = sidekickLabel ? variantsByLabel.get(sidekickLabel)?.variant : undefined;
-      if (!leadLabel || !lead || !sidekick || !leadLabel.startsWith(lead.family_label)) {
+      if (!leadLabel || !lead || !sidekick) {
         unfamiliar.push(variant);
         continue;
       }
-      const slug = `fusion/${lead.slug}/${sidekick.model_uid}`;
-      const label = `Fusion (${lead.family_label} + ${sidekick.label})`;
+      const slug = `fusion/${lead.family.slug}/${sidekick.model_uid}`;
+      const label = `Fusion (${lead.family.family_label} + ${sidekick.label})`;
       const group = groups.get(slug);
       const groupedVariant = {
         ...variant,
-        label: `${label}${leadLabel.slice(lead.family_label.length)}`,
+        traits: lead.variant.traits,
       };
       groups.set(slug, {
         slug,
         family_label: label,
         fusion: {
-          lead: { id: lead.slug, name: lead.family_label },
+          lead: { id: lead.family.slug, name: lead.family.family_label },
           sidekick: { id: sidekick.model_uid, name: sidekick.label },
         },
         variants: [...(group?.variants ?? []), groupedVariant],
@@ -127,7 +143,7 @@ function selectableFamilies(catalog: Catalog): ReadonlyArray<SelectableFamily> {
 export function devinModels(catalog: Catalog): ServerProviderModel[] {
   return selectableFamilies(catalog).flatMap((family): ServerProviderModel[] => {
     const variants = familyVariants(family);
-    if (variants.length !== family.variants.length) {
+    if (!variants) {
       return family.variants.map((variant) => ({
         slug: variant.model_uid,
         name: variant.label,
@@ -171,17 +187,17 @@ export function devinModels(catalog: Catalog): ServerProviderModel[] {
         currentValue: first.contextWindow,
         options: contexts.map((id) => ({ id, label: id === "1m" ? "1M" : "Standard" })),
       });
-    const model: ServerProviderModel = {
-      slug: family.slug,
-      name: family.family_label,
-      isCustom: false,
-      isDefault: false,
-      capabilities: { optionDescriptors: descriptors },
-    };
-    const withAliases = family.aliases ? { ...model, aliases: family.aliases } : model;
-    const withFusion = family.fusion ? { ...withAliases, fusion: family.fusion } : withAliases;
     return [
-      variants.some((variant) => variant.is_new) ? { ...withFusion, badge: "new" } : withFusion,
+      {
+        slug: family.slug,
+        name: family.family_label,
+        isCustom: false,
+        isDefault: false,
+        aliases: family.aliases,
+        fusion: family.fusion,
+        badge: variants.some((variant) => variant.is_new) ? "new" : undefined,
+        capabilities: { optionDescriptors: descriptors },
+      },
     ];
   });
 }
@@ -197,8 +213,8 @@ export function resolveDevinModel(
   // Exact native IDs (including custom models) remain valid for existing sessions.
   if (!family) return selection.model;
   const variants = familyVariants(family);
-  const first = variants[0];
-  if (!first || variants.length !== family.variants.length)
+  const first = variants?.[0];
+  if (!variants || !first)
     return family.variants.find((variant) => variant.model_uid === selection.model)?.model_uid;
   return variants.find((variant) =>
     (["reasoningEffort", "fastMode", "contextWindow"] as const).every(

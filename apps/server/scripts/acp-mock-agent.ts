@@ -618,7 +618,10 @@ const program = Effect.gen(function* () {
           process.exit(7);
         });
       }
-      if (failSetConfigOption) {
+      if (
+        failSetConfigOption ||
+        (request.configId === "model" && request.value === process.env.T3_ACP_REJECT_MODEL)
+      ) {
         return yield* AcpError.AcpRequestError.invalidParams(
           "Mock invalid params for session/set_config_option",
           {

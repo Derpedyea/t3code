@@ -9,8 +9,7 @@ import { resolveSelectableModel } from "@t3tools/shared/model";
 import { useAtomValue } from "@effect/atom-react";
 import { LegendList, type LegendListRef } from "@legendapp/list/react";
 import { memo, useMemo, useState, useCallback, useEffect, useLayoutEffect, useRef } from "react";
-import { ChevronRightIcon, SearchIcon, StarIcon } from "lucide-react";
-import { DevinIcon } from "../Icons";
+import { ChevronRightIcon, SearchIcon } from "lucide-react";
 import { FusionModelPicker } from "./FusionModelPicker";
 import { collapseFusionModels } from "./fusionModelPicker";
 import { ModelListRow } from "./ModelListRow";
@@ -42,7 +41,7 @@ import {
 import { useClientSettings, useUpdateClientSettings } from "~/hooks/useSettings";
 import { cn } from "~/lib/utils";
 import { getVirtualizedScrollFadeClassName } from "../ui/scroll-area";
-import { Tooltip, TooltipPopup, TooltipTrigger, TooltipProvider } from "../ui/tooltip";
+import { TooltipProvider } from "../ui/tooltip";
 import { Button } from "../ui/button";
 import {
   isProviderInstancePickerReady,
@@ -184,7 +183,9 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
     instanceId: ProviderInstanceId;
     model: string;
   } | null>(() =>
-    activeModel?.fusion ? { instanceId: props.activeInstanceId, model: activeModel.slug } : null,
+    activeModel?.fusion && !activeModel.isUnavailable
+      ? { instanceId: props.activeInstanceId, model: activeModel.slug }
+      : null,
   );
   const activeModelSlug =
     activeModel?.slug ?? (props.model === ANTIGRAVITY_DEFAULT_MODEL ? "" : props.model);
@@ -569,26 +570,16 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
 
   const handleModelSelect = useCallback(
     (modelSlug: string, instanceId: ProviderInstanceId) => {
-      const option = modelOptionsByInstance
-        .get(instanceId)
-        ?.find((model) => model.slug === modelSlug);
+      const options = modelOptionsByInstance.get(instanceId);
+      const entry = entryByInstanceId.get(instanceId);
+      if (!options || !entry || getModelDisabledReason?.(instanceId, modelSlug)) return;
+      const option = options.find((model) => model.slug === modelSlug);
       if (
         option?.fusion &&
         !option.isUnavailable &&
         (selectedInstanceId !== "favorites" || isSearching)
       ) {
         setFusionSelection({ instanceId, model: modelSlug });
-        return;
-      }
-      if (getModelDisabledReason?.(instanceId, modelSlug)) {
-        return;
-      }
-      const options = modelOptionsByInstance.get(instanceId);
-      if (!options) {
-        return;
-      }
-      const entry = entryByInstanceId.get(instanceId);
-      if (!entry) {
         return;
       }
       // `resolveSelectableModel` uses the driver kind for normalization
@@ -951,59 +942,6 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
                     if (!model) {
                       return null;
                     }
-                    if (model.fusion && model.isFusionGroup) {
-                      const isFavorite = favoritesSet.has(
-                        providerModelKey(model.instanceId, model.slug),
-                      );
-                      return (
-                        <ComboboxItem
-                          hideIndicator
-                          index={index}
-                          value={modelKey}
-                          className="w-full min-w-0 cursor-pointer rounded-md px-2 py-2"
-                          contentClassName="flex w-full min-w-0 items-center gap-3"
-                        >
-                          <div className="min-w-0 flex-1 text-left">
-                            <div className="text-xs font-medium leading-snug">Fusion</div>
-                            <div className="mt-1 flex items-center gap-1.5">
-                              <DevinIcon className="size-3 shrink-0" />
-                              <Tooltip>
-                                <TooltipTrigger
-                                  render={
-                                    <span className="truncate text-xs font-normal leading-snug text-muted-foreground/70" />
-                                  }
-                                >
-                                  {model.fusion.lead.name} + {model.fusion.sidekick.name}
-                                </TooltipTrigger>
-                                <TooltipPopup>
-                                  {model.instanceDisplayName} · {model.fusion.lead.name} +{" "}
-                                  {model.fusion.sidekick.name}
-                                </TooltipPopup>
-                              </Tooltip>
-                            </div>
-                          </div>
-                          <Button
-                            size="icon-xs"
-                            variant="ghost"
-                            className="shrink-0 text-muted-foreground/70 hover:text-foreground"
-                            onClick={(event) => {
-                              event.stopPropagation();
-                              toggleFavorite(model.instanceId, model.slug);
-                            }}
-                            onKeyDown={(event) => event.stopPropagation()}
-                            aria-label={isFavorite ? "Remove from favorites" : "Add to favorites"}
-                          >
-                            <StarIcon
-                              className={cn(
-                                "size-3.5 sm:size-3",
-                                isFavorite && "fill-current text-yellow-500",
-                              )}
-                            />
-                          </Button>
-                          <ChevronRightIcon className="size-3.5 shrink-0 text-muted-foreground" />
-                        </ComboboxItem>
-                      );
-                    }
                     const disabledReason =
                       getModelDisabledReason?.(model.instanceId, model.slug) ?? null;
                     return (
@@ -1013,7 +951,11 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
                         model={model}
                         instanceId={model.instanceId}
                         driverKind={model.driverKind}
-                        providerDisplayName={model.instanceDisplayName}
+                        providerDisplayName={
+                          model.isFusionGroup && model.fusion
+                            ? `${model.instanceDisplayName} · ${model.fusion.lead.name} + ${model.fusion.sidekick.name}`
+                            : model.instanceDisplayName
+                        }
                         providerAccentColor={model.instanceAccentColor}
                         isFavorite={favoritesSet.has(
                           providerModelKey(model.instanceId, model.slug),

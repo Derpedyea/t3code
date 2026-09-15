@@ -176,3 +176,22 @@ it("groups Fusion by lead and exact sidekick while keeping the lead's thinking a
   ).toBe("pair-fast-high");
   expect(resolveDevinModel(fusionCatalog, { model: pairings[1]!.slug })).toBe("pair-other");
 });
+
+it("preserves native Fusion labels when the offered pairings cannot form independent controls", () => {
+  const variants = [
+    { model_uid: "pair-high", label: "Fusion (Opus High + SWE High)" },
+    { model_uid: "pair-fast-medium", label: "Fusion (Opus Medium Fast + SWE High)" },
+  ];
+  const incomplete = {
+    families: [...catalog.families, { slug: "fusion", family_label: "Fusion", variants }],
+  };
+  expect(
+    devinModels(incomplete)
+      .slice(-2)
+      .map(({ slug, name }) => ({ slug, name })),
+  ).toEqual(variants.map(({ model_uid, label }) => ({ slug: model_uid, name: label })));
+  for (const variant of variants) {
+    expect(resolveDevinModel(incomplete, { model: variant.model_uid })).toBe(variant.model_uid);
+  }
+  expect(resolveDevinModel(incomplete, { model: "fusion/opus/native-swe" })).toBeUndefined();
+});

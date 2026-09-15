@@ -1,3 +1,7 @@
+import { vi } from "vite-plus/test";
+import * as Deferred from "effect/Deferred";
+import * as Fiber from "effect/Fiber";
+import * as DevinSkills from "./DevinSkills.ts";
 import { expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import { ProviderInstanceId } from "@t3tools/contracts";
@@ -173,5 +177,68 @@ it.effect("refreshes account models and workspace skills and clears metadata aft
       expect(signedOut.workspaceSnapshots).toEqual([]);
       expect(signedOut.slashCommands.some((command) => command.name === "plan")).toBe(false);
     }
+  }).pipe(Effect.provide(driverLayer)),
+);
+
+it.effect("refreshes skills with bounded concurrency without reordering workspace metadata", () =>
+  Effect.gen(function* () {
+    const h = yield* makeHarness({ T3_DEVIN_AUTH_STATUS: "Logged in (via Devin)." });
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const instance = yield* DevinDriver.create({
+      instanceId,
+      displayName: "Devin test",
+      enabled: true,
+      config: h.settings,
+      environment: [],
+    });
+    const snapshotForCwd = instance.snapshotForCwd;
+    if (!snapshotForCwd) throw new Error("Devin must expose workspace metadata.");
+    yield* instance.snapshot.refresh;
+    const workspaces = Array.from({ length: 5 }, (_, i) => path.join(h.root, `workspace-${i}`));
+    for (const cwd of workspaces) {
+      yield* fs.makeDirectory(cwd);
+      yield* snapshotForCwd(cwd);
+    }
+    const gates = yield* Effect.forEach(workspaces, () => Deferred.make<void>());
+    const firstBatch = yield* Deferred.make<void>();
+    const lastStarted = yield* Deferred.make<void>();
+    let active = 0;
+    let peak = 0;
+    let started = 0;
+    yield* Effect.acquireRelease(
+      Effect.sync(() =>
+        vi.spyOn(DevinSkills, "discoverDevinSkills").mockImplementation((_settings, _env, cwd) =>
+          Effect.gen(function* () {
+            active++;
+            peak = Math.max(peak, active);
+            if (++started === 4) yield* Deferred.succeed(firstBatch, undefined);
+            if (started === 5) yield* Deferred.succeed(lastStarted, undefined);
+            yield* Deferred.await(gates[workspaces.indexOf(cwd)]!);
+            return [{ name: "refreshed", path: path.join(cwd, "SKILL.md"), enabled: true }];
+          }).pipe(
+            Effect.ensuring(
+              Effect.sync(() => {
+                active--;
+              }),
+            ),
+          ),
+        ),
+      ),
+      (spy) => Effect.sync(() => spy.mockRestore()),
+    );
+    const refresh = yield* instance.snapshot.refresh.pipe(Effect.forkScoped);
+    yield* Deferred.await(firstBatch);
+    expect(started).toBe(4);
+    expect(active).toBe(4);
+    yield* Deferred.succeed(gates[3]!, undefined);
+    yield* Deferred.await(lastStarted);
+    for (const index of [4, 2, 1, 0]) yield* Deferred.succeed(gates[index]!, undefined);
+    const snapshot = yield* Fiber.join(refresh);
+    expect(peak).toBe(4);
+    expect(snapshot.workspaceSnapshots?.map(({ cwd }) => cwd)).toEqual(workspaces);
+    expect(
+      snapshot.workspaceSnapshots?.every(({ skills }) => skills[0]?.name === "refreshed"),
+    ).toBe(true);
   }).pipe(Effect.provide(driverLayer)),
 );

@@ -1,8 +1,4 @@
-import {
-  type DevinSettings,
-  type ServerProviderModel,
-  type ServerProviderSlashCommand,
-} from "@t3tools/contracts";
+import { type DevinSettings, type ServerProviderModel } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import { checkDevinExecutable, readDevinModels, runDevinCommand } from "../acp/DevinAcpSupport.ts";
@@ -13,13 +9,10 @@ import {
   type ProviderProbeResult,
 } from "../providerSnapshot.ts";
 
-export const buildDevinProviderSnapshot = Effect.fn("buildDevinProviderSnapshot")(function* (
+const buildDevinProviderSnapshot = Effect.fn("buildDevinProviderSnapshot")(function* (
   settings: DevinSettings,
   probe: ProviderProbeResult,
   models: ReadonlyArray<ServerProviderModel> = [],
-  slashCommands: ReadonlyArray<ServerProviderSlashCommand> = [
-    { name: "compact", description: "Summarize the conversation and reduce context usage" },
-  ],
 ) {
   return {
     ...buildServerProvider({
@@ -31,7 +24,9 @@ export const buildDevinProviderSnapshot = Effect.fn("buildDevinProviderSnapshot"
       enabled: settings.enabled,
       checkedAt: yield* Effect.map(DateTime.now, DateTime.formatIso),
       models: providerModelsFromSettings(models, settings.customModels, { optionDescriptors: [] }),
-      slashCommands,
+      slashCommands: [
+        { name: "compact", description: "Summarize the conversation and reduce context usage" },
+      ],
       probe,
     }),
     supportsTextGeneration: false,
@@ -99,7 +94,6 @@ export const checkDevinProviderStatus = Effect.fn("checkDevinProviderStatus")(fu
       message: "Could not verify Devin sign-in. Run devin auth status on this environment.",
     } satisfies ProviderProbeResult;
   }).pipe(
-    Effect.scoped,
     Effect.timeout("15 seconds"),
     Effect.catch((cause) =>
       Effect.succeed({
@@ -115,7 +109,6 @@ export const checkDevinProviderStatus = Effect.fn("checkDevinProviderStatus")(fu
   );
   if (probe.status !== "ready") return yield* buildDevinProviderSnapshot(settings, probe);
   return yield* readDevinModels(settings, environment).pipe(
-    Effect.scoped,
     Effect.timeout("15 seconds"),
     Effect.flatMap((models) => buildDevinProviderSnapshot(settings, probe, models)),
     Effect.catch((cause) =>

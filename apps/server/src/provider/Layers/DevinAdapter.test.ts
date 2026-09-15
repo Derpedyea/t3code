@@ -30,21 +30,41 @@ import {
 
 const threadId = ThreadId.make("devin-thread");
 const instanceId = ProviderInstanceId.make("devin-account");
+const RequestLog = Schema.Struct({
+  event: Schema.Struct({
+    kind: Schema.Literal("request"),
+    payload: Schema.Struct({ method: Schema.String, status: Schema.String }),
+  }),
+});
+const isRequestLog = Schema.is(RequestLog);
 const makeHarness = Effect.fn("makeDevinAdapterHarness")(function* (
-  ...args: Parameters<typeof makeDevinCli>
+  env: Parameters<typeof makeDevinCli>[0] = {},
+  onRequest?: (request: typeof RequestLog.Type.event.payload) => Effect.Effect<void>,
 ) {
-  const cli = yield* makeDevinCli(...args);
+  const cli = yield* makeDevinCli(env);
   const { settings, environment, root } = cli;
-  const adapter = yield* makeDevinAdapter(settings, { instanceId, environment });
+  const adapter = yield* makeDevinAdapter(settings, {
+    instanceId,
+    environment,
+    nativeEventLogger: {
+      filePath: cli.requestLog,
+      close: () => Effect.void,
+      write: (event) =>
+        isRequestLog(event) ? (onRequest?.(event.event.payload) ?? Effect.void) : Effect.void,
+    },
+  });
   const events: ProviderRuntimeEvent[] = [];
+  const firstPrompt = yield* Deferred.make<void>();
   const approval =
     yield* Deferred.make<Extract<ProviderRuntimeEvent, { type: "request.opened" }>>();
   yield* Stream.runForEach(adapter.streamEvents, (event) =>
     Effect.gen(function* () {
       events.push(event);
       if (event.type === "request.opened") yield* Deferred.succeed(approval, event);
+      if (event.type === "thread.token-usage.updated")
+        yield* Deferred.succeed(firstPrompt, undefined);
     }),
-  ).pipe(Effect.forkScoped);
+  ).pipe(Effect.forkScoped({ startImmediately: true }));
   const start = (model = "devin-test-low") =>
     adapter.startSession({
       threadId,
@@ -52,7 +72,7 @@ const makeHarness = Effect.fn("makeDevinAdapterHarness")(function* (
       runtimeMode: "approval-required",
       modelSelection: { instanceId, model },
     });
-  return { ...cli, adapter, events, approval, start };
+  return { ...cli, adapter, events, approval, firstPrompt, start };
 });
 
 const registerT3Tools = Effect.acquireRelease(
@@ -431,7 +451,10 @@ it.effect("reports prompt failures and refuses a model from another instance", (
 
 it.effect("settles a steered turn when the replacement model is unavailable", () =>
   Effect.gen(function* () {
-    const h = yield* makeHarness({ T3_ACP_EMIT_TOOL_CALLS: "1" });
+    const h = yield* makeHarness({
+      T3_ACP_EMIT_TOOL_CALLS: "1",
+      T3_ACP_REJECT_MODEL: "unavailable-model",
+    });
     yield* h.start();
     const first = yield* h.adapter
       .sendTurn({ threadId, input: "Read metadata" })
@@ -445,6 +468,9 @@ it.effect("settles a steered turn when the replacement model is unavailable", ()
       })
       .pipe(Effect.result);
     expect(replacement._tag).toBe("Failure");
+    expect(
+      (yield* h.requests).filter((request) => request.method === "session/prompt"),
+    ).toHaveLength(1);
     yield* Fiber.join(first);
     expect((yield* h.adapter.listSessions())[0]?.activeTurnId).toBeUndefined();
     expect(h.events.filter((event) => event.type === "turn.completed")).toHaveLength(1);
@@ -487,52 +513,24 @@ it.effect("stopping an active session settles its turn before reopening the thre
 
 it.effect("Stop waits for a steering launch and cancels its replacement prompt", () =>
   Effect.gen(function* () {
-    const cli = yield* makeDevinCli({ T3_ACP_WAIT_FOR_CANCEL: "1" });
     const modeHeld = yield* Deferred.make<void>();
     const releaseMode = yield* Deferred.make<void>();
-    const firstPrompt = yield* Deferred.make<void>();
     const secondPrompt = yield* Deferred.make<void>();
-    const isRequestLog = Schema.is(
-      Schema.Struct({
-        event: Schema.Struct({
-          kind: Schema.Literal("request"),
-          payload: Schema.Struct({ method: Schema.String, status: Schema.String }),
-        }),
-      }),
-    );
     let modeCount = 0;
     let promptCount = 0;
-    const adapter = yield* makeDevinAdapter(cli.settings, {
-      instanceId,
-      environment: cli.environment,
-      nativeEventLogger: {
-        filePath: cli.requestLog,
-        close: () => Effect.void,
-        write: (event) =>
-          Effect.gen(function* () {
-            if (!isRequestLog(event) || event.event.payload.status !== "started") return;
-            const { method } = event.event.payload;
-            if (method === "session/set_mode" && ++modeCount === 3) {
-              yield* Deferred.succeed(modeHeld, undefined);
-              yield* Deferred.await(releaseMode);
-            }
-            if (method === "session/prompt") {
-              if (++promptCount === 2) yield* Deferred.succeed(secondPrompt, undefined);
-            }
-          }),
-      },
-    });
-    yield* Stream.runForEach(adapter.streamEvents, (event) =>
-      event.type === "thread.token-usage.updated"
-        ? Deferred.succeed(firstPrompt, undefined)
-        : Effect.void,
-    ).pipe(Effect.forkScoped({ startImmediately: true }));
-    yield* adapter.startSession({
-      threadId,
-      cwd: cli.root,
-      runtimeMode: "approval-required",
-      modelSelection: { instanceId, model: "devin-test-low" },
-    });
+    const h = yield* makeHarness({ T3_ACP_WAIT_FOR_CANCEL: "1" }, ({ method, status }) =>
+      Effect.gen(function* () {
+        if (status !== "started") return;
+        if (method === "session/set_mode" && ++modeCount === 3) {
+          yield* Deferred.succeed(modeHeld, undefined);
+          yield* Deferred.await(releaseMode);
+        }
+        if (method === "session/prompt" && ++promptCount === 2)
+          yield* Deferred.succeed(secondPrompt, undefined);
+      }),
+    );
+    const { adapter, firstPrompt } = h;
+    yield* h.start();
     const first = yield* adapter.sendTurn({ threadId, input: "First" }).pipe(Effect.forkScoped);
     yield* Deferred.await(firstPrompt);
     const replacement = yield* adapter
@@ -545,7 +543,7 @@ it.effect("Stop waits for a steering launch and cancels its replacement prompt",
     yield* Deferred.succeed(releaseMode, undefined);
     yield* Deferred.await(secondPrompt);
     yield* Fiber.join(stop);
-    const methods = (yield* cli.requests)
+    const methods = (yield* h.requests)
       .map((request) => request.method)
       .filter((method) => method === "session/prompt" || method === "session/cancel");
     expect(methods).toEqual([
@@ -557,5 +555,85 @@ it.effect("Stop waits for a steering launch and cancels its replacement prompt",
     yield* Fiber.join(first);
     yield* Fiber.join(replacement);
     expect((yield* adapter.listSessions())[0]?.status).toBe("ready");
+  }).pipe(Effect.provide(layer)),
+);
+
+it.effect("finishes interrupted turn cleanup before allowing a replacement to launch", () =>
+  Effect.gen(function* () {
+    const secondPrompt = yield* Deferred.make<void>();
+    const cancelHeld = yield* Deferred.make<void>();
+    const releaseCancel = yield* Deferred.make<void>();
+    let cancellations = 0;
+    let prompts = 0;
+    const h = yield* makeHarness({ T3_ACP_WAIT_FOR_CANCEL: "1" }, ({ method, status }) =>
+      Effect.gen(function* () {
+        if (method !== "session/prompt") return;
+        if (status === "succeeded" && ++cancellations === 1) {
+          yield* Deferred.succeed(cancelHeld, undefined);
+          yield* Deferred.await(releaseCancel);
+        }
+        if (status === "started" && ++prompts === 2)
+          yield* Deferred.succeed(secondPrompt, undefined);
+      }),
+    );
+    const { adapter, firstPrompt, events } = h;
+    yield* h.start();
+    const first = yield* adapter.sendTurn({ threadId, input: "First" }).pipe(Effect.forkScoped);
+    yield* Deferred.await(firstPrompt);
+    const interrupt = yield* Fiber.interrupt(first).pipe(Effect.forkScoped);
+    yield* Deferred.await(cancelHeld);
+    const replacement = yield* adapter
+      .sendTurn({ threadId, input: "Replacement" })
+      .pipe(Effect.forkScoped({ startImmediately: true }));
+    yield* Deferred.succeed(releaseCancel, undefined);
+    yield* Fiber.join(interrupt);
+    yield* Deferred.await(secondPrompt);
+    yield* adapter.interruptTurn(threadId);
+    yield* Fiber.join(replacement);
+    const started = events.filter((event) => event.type === "turn.started");
+    const completed = events.filter((event) => event.type === "turn.completed");
+    expect(started).toHaveLength(2);
+    expect(completed.map((event) => event.turnId)).toEqual(started.map((event) => event.turnId));
+    expect(new Set(started.map((event) => event.turnId)).size).toBe(2);
+  }).pipe(Effect.provide(layer)),
+);
+
+it.effect("keeps lifecycle operations ordered per thread without blocking other threads", () =>
+  Effect.gen(function* () {
+    const starting = yield* Deferred.make<void>();
+    const release = yield* Deferred.make<void>();
+    let starts = 0;
+    const h = yield* makeHarness({}, ({ method, status }) =>
+      Effect.gen(function* () {
+        if (method === "initialize" && status === "started" && ++starts === 2) {
+          yield* Deferred.succeed(starting, undefined);
+          yield* Deferred.await(release);
+        }
+      }),
+    );
+    yield* h.start();
+    const pendingThread = ThreadId.make("pending-devin-thread");
+    const pending = yield* h.adapter
+      .startSession({
+        threadId: pendingThread,
+        cwd: h.root,
+        runtimeMode: "full-access",
+      })
+      .pipe(Effect.forkScoped);
+    yield* Deferred.await(starting);
+    const stopRequested = yield* Deferred.make<void>();
+    const stopPending = yield* Deferred.succeed(stopRequested, undefined).pipe(
+      Effect.andThen(h.adapter.stopSession(pendingThread)),
+      Effect.forkScoped,
+    );
+    yield* Deferred.await(stopRequested);
+    yield* h.adapter.stopSession(threadId);
+    expect(yield* h.adapter.hasSession(threadId)).toBe(false);
+    yield* h.start();
+    yield* Deferred.succeed(release, undefined);
+    yield* Fiber.join(pending);
+    yield* Fiber.join(stopPending);
+    expect(yield* h.adapter.hasSession(pendingThread)).toBe(false);
+    expect(yield* h.adapter.hasSession(threadId)).toBe(true);
   }).pipe(Effect.provide(layer)),
 );

@@ -52,28 +52,25 @@ export function FusionWave({ animated = false }: { animated?: boolean }) {
       className="fusion-wave pointer-events-none absolute inset-0 size-full"
     >
       <defs>
-        <linearGradient
-          id={`${gradientId}-upper`}
-          gradientUnits="userSpaceOnUse"
-          x1="330"
-          y1="0"
-          x2="375"
-          y2="0"
-        >
-          <stop stopColor="#3969CA" />
-          <stop offset="1" stopColor="#0294DE" />
-        </linearGradient>
-        <linearGradient
-          id={`${gradientId}-lower`}
-          gradientUnits="userSpaceOnUse"
-          x1="330"
-          y1="0"
-          x2="375"
-          y2="0"
-        >
-          <stop stopColor="#21C19A" />
-          <stop offset="1" stopColor="#0294DE" />
-        </linearGradient>
+        {(
+          [
+            ["upper", "#3969CA"],
+            ["lower", "#21C19A"],
+          ] as const
+        ).map(([side, color]) => (
+          <linearGradient
+            key={side}
+            id={`${gradientId}-${side}`}
+            gradientUnits="userSpaceOnUse"
+            x1="330"
+            y1="0"
+            x2="375"
+            y2="0"
+          >
+            <stop stopColor={color} />
+            <stop offset="1" stopColor="#0294DE" />
+          </linearGradient>
+        ))}
       </defs>
       {animated && (
         <g fill="none" stroke="#0294DE" strokeWidth="2" strokeDasharray="2 10" opacity="0.8">
