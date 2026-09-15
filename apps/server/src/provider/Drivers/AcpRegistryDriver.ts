@@ -514,6 +514,24 @@ export const AcpRegistryDriver: ProviderDriver<AcpRegistrySettings, AcpRegistryD
         settings: effectiveConfig,
         environment: processEnvironment,
       };
+      const enrichmentCache = yield* Ref.make<{
+        readonly generation: number;
+        readonly entry: {
+          readonly provider: ServerProvider;
+          readonly expiresAt: number;
+        } | null;
+      }>({ generation: 0, entry: null });
+      // Only CLI discovery owns Devin's catalog. Readiness and live ACP updates
+      // cannot turn their default placeholder into an authoritative replacement.
+      const currentDevinModels = Ref.get(enrichmentCache).pipe(
+        Effect.map((cache) =>
+          providerModelsFromSettings(
+            cache.entry?.provider.models ?? [],
+            effectiveConfig.customModels,
+            EMPTY_CAPABILITIES,
+          ),
+        ),
+      );
       const withLiveRuntimeState = (provider: ServerProvider) =>
         Option.isNone(runtimeCoordinator)
           ? Effect.succeed(provider)
@@ -539,14 +557,12 @@ export const AcpRegistryDriver: ProviderDriver<AcpRegistrySettings, AcpRegistryD
       const checkProvider = checkAcpRegistryProviderReadiness(readinessInput).pipe(
         Effect.provideService(AcpRegistryCatalog, catalog),
         Effect.flatMap(withLiveRuntimeState),
+        Effect.flatMap((provider) =>
+          effectiveConfig.agentId === "devin"
+            ? currentDevinModels.pipe(Effect.map((models) => ({ ...provider, models })))
+            : Effect.succeed(provider),
+        ),
       );
-      const enrichmentCache = yield* Ref.make<{
-        readonly generation: number;
-        readonly entry: {
-          readonly provider: ServerProvider;
-          readonly expiresAt: number;
-        } | null;
-      }>({ generation: 0, entry: null });
       const enrichProvider = checkAcpRegistryProviderStatus(
         {
           ...readinessInput,
@@ -566,22 +582,17 @@ export const AcpRegistryDriver: ProviderDriver<AcpRegistrySettings, AcpRegistryD
             Effect.map(devinModels),
             Effect.catch((cause) =>
               Effect.logWarning("Devin model discovery failed", cause).pipe(
-                Effect.andThen(Ref.get(enrichmentCache)),
-                Effect.map((cache) => cache.entry?.provider.models ?? []),
+                Effect.andThen(currentDevinModels),
               ),
             ),
-            Effect.map((models) =>
-              models.length === 0
-                ? provider
-                : {
-                    ...provider,
-                    models: providerModelsFromSettings(
-                      models,
-                      effectiveConfig.customModels,
-                      EMPTY_CAPABILITIES,
-                    ),
-                  },
-            ),
+            Effect.map((models) => ({
+              ...provider,
+              models: providerModelsFromSettings(
+                models,
+                effectiveConfig.customModels,
+                EMPTY_CAPABILITIES,
+              ),
+            })),
           );
         }),
         Effect.provideService(AcpRegistryCatalog, catalog),
@@ -769,7 +780,11 @@ export const AcpRegistryDriver: ProviderDriver<AcpRegistrySettings, AcpRegistryD
                       Effect.flatMap(({ spawn }) => discoverDevinSkills(spawn)),
                       Effect.provideService(Path.Path, path),
                       Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
-                      Effect.map((skills) => ({ ...provider, skills })),
+                      Effect.map((skills) => ({
+                        checkedAt: provider.checkedAt,
+                        status: provider.status,
+                        skills,
+                      })),
                       Effect.mapError(
                         (cause) =>
                           new ProviderDriverError({

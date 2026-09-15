@@ -130,6 +130,8 @@ export const ServerProviderWorkspaceSnapshot = Schema.Struct({
   cwd: TrimmedNonEmptyString,
   checkedAt: IsoDateTime,
   slashCommands: Schema.Array(ServerProviderSlashCommand),
+  /** Skills-only discovery inherits live commands; the array remains for older clients. */
+  slashCommandsSource: Schema.optionalKey(Schema.Literal("provider")),
   skills: Schema.Array(ServerProviderSkill),
 });
 export type ServerProviderWorkspaceSnapshot = typeof ServerProviderWorkspaceSnapshot.Type;

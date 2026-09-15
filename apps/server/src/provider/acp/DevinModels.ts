@@ -179,14 +179,14 @@ export function devinModels(catalog: Catalog): ServerProviderModel[] {
     const contexts = ["standard", "1m"].filter((context) =>
       variants.some((variant) => variant.contextWindow === context),
     );
-    if (contexts.length > 1)
-      descriptors.push({
-        id: "contextWindow",
-        label: "Context window",
-        type: "select",
-        currentValue: first.contextWindow,
-        options: contexts.map((id) => ({ id, label: id === "1m" ? "1M" : "Standard" })),
-      });
+    // Keep the remaining context size selectable after an account loses a variant.
+    descriptors.push({
+      id: "contextWindow",
+      label: "Context window",
+      type: "select",
+      currentValue: first.contextWindow,
+      options: contexts.map((id) => ({ id, label: id === "1m" ? "1M" : "Standard" })),
+    });
     // Provider snapshots cross a JSON boundary before their schema is applied.
     // Omit absent metadata instead of sending explicit undefined properties.
     let model: ServerProviderModel = {

@@ -1,5 +1,9 @@
-import { expect, it } from "@effect/vitest";
+import { assert, expect, it } from "@effect/vitest";
 import * as Schema from "effect/Schema";
+import {
+  buildProviderOptionSelectionsFromDescriptors,
+  getProviderOptionDescriptors,
+} from "@t3tools/shared/model";
 import { devinModels, resolveDevinModel } from "./DevinModels.ts";
 
 const isJson = Schema.is(Schema.Json);
@@ -40,6 +44,13 @@ it("groups variants into independent controls, including a single remaining thin
       ],
     },
     { id: "fastMode", label: "Fast mode", type: "boolean", currentValue: false },
+    {
+      id: "contextWindow",
+      label: "Context window",
+      type: "select",
+      currentValue: "standard",
+      options: [{ id: "standard", label: "Standard" }],
+    },
   ]);
   expect(models[1]?.capabilities?.optionDescriptors?.[0]).toMatchObject({
     currentValue: "high",
@@ -50,9 +61,48 @@ it("groups variants into independent controls, including a single remaining thin
   expect(devinModels(reordered)[0]?.capabilities?.optionDescriptors).toEqual([
     { ...models[0]!.capabilities!.optionDescriptors![0], currentValue: "medium" },
     { ...models[0]!.capabilities!.optionDescriptors![1], currentValue: true },
+    models[0]!.capabilities!.optionDescriptors![2],
   ]);
   expect(resolveDevinModel(reordered, { model: "opus" })).toBe("fast-medium");
 });
+
+it.each([
+  { remaining: "standard", removed: "1m", label: "Opus High", display: "Standard" },
+  { remaining: "1m", removed: "standard", label: "Opus High 1M", display: "1M" },
+])(
+  "can replace a removed context size with $remaining",
+  ({ remaining, removed, label, display }) => {
+    const catalog = {
+      families: [
+        { slug: "opus", family_label: "Opus", variants: [{ model_uid: "native", label }] },
+      ],
+    };
+    const model = devinModels(catalog)[0]!;
+    const selection = { model: model.slug, options: [{ id: "contextWindow", value: removed }] };
+    expect(resolveDevinModel(catalog, selection)).toBeUndefined();
+    const descriptors = getProviderOptionDescriptors({
+      caps: model.capabilities!,
+      selections: selection.options,
+      preserveUnavailableSelections: true,
+    });
+    expect(descriptors.find((descriptor) => descriptor.id === "contextWindow")).toMatchObject({
+      currentValue: removed,
+      options: [
+        { id: remaining, label: display },
+        { id: removed, label: `${removed} (Unavailable)` },
+      ],
+    });
+    const options = buildProviderOptionSelectionsFromDescriptors(
+      descriptors.map((descriptor) =>
+        descriptor.type === "select" && descriptor.id === "contextWindow"
+          ? { ...descriptor, currentValue: remaining }
+          : descriptor,
+      ),
+    );
+    assert.isDefined(options);
+    expect(resolveDevinModel(catalog, { model: model.slug, options })).toBe("native");
+  },
+);
 
 it.each([
   { effort: "medium", fast: false, expected: "medium" },

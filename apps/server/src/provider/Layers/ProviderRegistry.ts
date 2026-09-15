@@ -27,6 +27,7 @@ import {
   ProviderDriverKind,
   type ProviderInstanceId,
   type ServerProvider,
+  type ServerProviderWorkspaceSnapshot,
   type ServerProviderUpdateState,
 } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
@@ -51,7 +52,7 @@ import {
   resolveProviderStatusCachePath,
   writeProviderStatusCache,
 } from "../providerStatusCache.ts";
-import type { ProviderInstance } from "../ProviderDriver.ts";
+import type { ProviderInstance, ProviderWorkspaceDiscovery } from "../ProviderDriver.ts";
 import { makeManualOnlyProviderMaintenanceCapabilities } from "../providerMaintenance.ts";
 import type { ProviderSnapshotSource } from "../builtInProviderCatalog.ts";
 
@@ -83,14 +84,17 @@ const MAX_WORKSPACE_SNAPSHOTS_PER_PROVIDER = 16;
 export function upsertProviderWorkspaceSnapshot(
   provider: ServerProvider,
   cwd: string,
-  scopedSnapshot: ServerProvider,
+  scopedSnapshot: Omit<ProviderWorkspaceDiscovery, "status">,
 ): ServerProvider {
-  const workspaceSnapshot = {
+  let workspaceSnapshot: ServerProviderWorkspaceSnapshot = {
     cwd,
     checkedAt: scopedSnapshot.checkedAt,
-    slashCommands: scopedSnapshot.slashCommands,
+    slashCommands: scopedSnapshot.slashCommands ?? provider.slashCommands,
     skills: scopedSnapshot.skills,
-  } satisfies NonNullable<ServerProvider["workspaceSnapshots"]>[number];
+  };
+  if (scopedSnapshot.slashCommands === undefined) {
+    workspaceSnapshot = { ...workspaceSnapshot, slashCommandsSource: "provider" };
+  }
   return {
     ...provider,
     workspaceSnapshots: [

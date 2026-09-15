@@ -59,6 +59,14 @@ export interface ProviderDriverMetadata {
   readonly supportsMultipleInstances?: boolean;
 }
 
+export interface ProviderWorkspaceDiscovery {
+  readonly checkedAt: ServerProvider["checkedAt"];
+  readonly status: ServerProvider["status"];
+  readonly skills: ServerProvider["skills"];
+  /** Omit when discovery does not own slash commands. */
+  readonly slashCommands?: ServerProvider["slashCommands"];
+}
+
 /**
  * One materialized provider instance. Held by the registry, looked up by
  * `instanceId`, torn down by closing the scope it was created in.
@@ -78,7 +86,7 @@ export interface ProviderInstance {
   readonly snapshot: ServerProviderShape;
   /** Null means workspace discovery is not ready and must be retried instead of cached. */
   readonly snapshotForCwd?:
-    | ((cwd: string) => Effect.Effect<ServerProvider | null, ProviderDriverError>)
+    | ((cwd: string) => Effect.Effect<ProviderWorkspaceDiscovery | null, ProviderDriverError>)
     | undefined;
   readonly refreshModels?: () => Effect.Effect<void, ProviderDriverError>;
   /**
