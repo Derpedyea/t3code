@@ -404,6 +404,7 @@ const ThreadSettingsSessionContext = createContext<ThreadSettingsSessionValue | 
 function ThreadSettingsSessionProvider(
   props: ThreadSettingsSessionProps & { readonly children: ReactNode },
 ) {
+  const { onSelectModel, onUpdateOptionSelections } = props;
   const [showLegacyToggle, setShowLegacyToggle] = useState(false);
   const [providerFilter, setProviderFilter] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
@@ -456,11 +457,11 @@ function ThreadSettingsSessionProvider(
           return false;
         }
         void Haptics.selectionAsync();
-        props.onSelectModel(model);
+        onSelectModel(model);
       }
       return true;
     },
-    [pendingModel, props.onSelectModel, props.providerGroups],
+    [pendingModel, onSelectModel, props.providerGroups],
   );
 
   const applyOptionChange = useCallback(
@@ -475,10 +476,10 @@ function ThreadSettingsSessionProvider(
           selection: { ...pendingModel.selection, options: next },
         });
       } else {
-        props.onUpdateOptionSelections(next);
+        onUpdateOptionSelections(next);
       }
     },
-    [displayedDescriptors, pendingModel, props.onUpdateOptionSelections],
+    [displayedDescriptors, pendingModel, onUpdateOptionSelections],
   );
 
   const toggleProvider = useCallback((providerKey: string) => {
@@ -603,7 +604,7 @@ function ThreadSettingsModelListRow(props: {
   readonly isFirst: boolean;
   readonly isLast: boolean;
 }) {
-  const session = useThreadSettingsSession();
+  const { pressModel, isDisplayed } = useThreadSettingsSession();
   const navigation = useNavigation<NativeStackNavigationProp<ThreadSettingsPickerStackParams>>();
   const onPress = useCallback(() => {
     if (props.option.fusion && !props.option.isUnavailable) {
@@ -612,9 +613,9 @@ function ThreadSettingsModelListRow(props: {
         initialKey: props.option.key,
       });
     } else {
-      session.pressModel(props.option);
+      pressModel(props.option);
     }
-  }, [navigation, props.option, session]);
+  }, [navigation, props.option, pressModel]);
 
   return (
     <ModelRow
@@ -622,7 +623,7 @@ function ThreadSettingsModelListRow(props: {
       isLast={props.isLast}
       onPress={onPress}
       option={props.option}
-      selected={session.isDisplayed(props.option)}
+      selected={isDisplayed(props.option)}
     />
   );
 }
@@ -630,10 +631,10 @@ function ThreadSettingsModelListRow(props: {
 function ThreadSettingsProviderListHeader(props: {
   readonly provider: ThreadSettingsProviderCatalog;
 }) {
-  const session = useThreadSettingsSession();
+  const { toggleProvider } = useThreadSettingsSession();
   const onToggle = useCallback(
-    () => session.toggleProvider(props.provider.key),
-    [props.provider.key, session.toggleProvider],
+    () => toggleProvider(props.provider.key),
+    [props.provider.key, toggleProvider],
   );
 
   return (
@@ -651,6 +652,7 @@ function ThreadSettingsProviderListHeader(props: {
 function useThreadSettingsCatalogItems(
   session: ThreadSettingsSessionValue,
 ): ReadonlyArray<ThreadSettingsCatalogItem> {
+  const { isDisplayed } = session;
   return useMemo(
     () =>
       session.providerGroups.flatMap((group) => {
@@ -660,7 +662,7 @@ function useThreadSettingsCatalogItems(
         const driver = group.models[0]?.providerDriver ?? group.providerKey;
         const catalogModels = session.showLegacy
           ? group.models
-          : group.models.filter((model) => !model.isLegacy || session.isDisplayed(model));
+          : group.models.filter((model) => !model.isLegacy || isDisplayed(model));
         const visibleModels = collapseFusionOptions(
           catalogModels.filter((model) =>
             modelMatchesCatalogQuery({
@@ -669,7 +671,7 @@ function useThreadSettingsCatalogItems(
               query: session.searchQuery,
             }),
           ),
-          session.isDisplayed,
+          isDisplayed,
         );
         if (visibleModels.length === 0) {
           return [];
@@ -715,7 +717,7 @@ function useThreadSettingsCatalogItems(
       }),
     [
       session.isApplied,
-      session.isDisplayed,
+      isDisplayed,
       session.providerExpansionOverrides,
       session.providerFilter,
       session.providerGroups,

@@ -8,7 +8,16 @@ import {
 import { resolveSelectableModel } from "@t3tools/shared/model";
 import { useAtomValue } from "@effect/atom-react";
 import { LegendList, type LegendListRef } from "@legendapp/list/react";
-import { memo, useMemo, useState, useCallback, useEffect, useLayoutEffect, useRef } from "react";
+import {
+  memo,
+  useMemo,
+  useState,
+  useCallback,
+  useEffect,
+  useEffectEvent,
+  useLayoutEffect,
+  useRef,
+} from "react";
 import { ChevronRightIcon, SearchIcon } from "lucide-react";
 import { FusionModelPicker } from "./FusionModelPicker";
 import { collapseFusionModels } from "./fusionModelPicker";
@@ -187,6 +196,7 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
       ? { instanceId: props.activeInstanceId, model: activeModel.slug }
       : null,
   );
+  const isFusionPickerOpen = fusionSelection !== null;
   const activeModelSlug =
     activeModel?.slug ?? (props.model === ANTIGRAVITY_DEFAULT_MODEL ? "" : props.model);
   const activeModelKey = activeModelSlug
@@ -252,6 +262,7 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
   );
 
   useLayoutEffect(() => {
+    if (isFusionPickerOpen) return;
     focusSearchInput();
     const frame = window.requestAnimationFrame(() => {
       focusSearchInput();
@@ -263,7 +274,7 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
       window.cancelAnimationFrame(frame);
       window.clearTimeout(timeout);
     };
-  }, [focusSearchInput]);
+  }, [focusSearchInput, isFusionPickerOpen]);
 
   // Create a Set for efficient lookup. Favorites are keyed by
   // `${instanceId}:${slug}`; the storage schema widened from ProviderDriverKind
@@ -708,50 +719,44 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
     [favoritesSet, modelJumpLabelByKey],
   );
 
+  const onWindowKeyDown = useEffectEvent((event: globalThis.KeyboardEvent) => {
+    if (isFusionPickerOpen || event.defaultPrevented || event.repeat || isCommandPaletteOpen()) {
+      return;
+    }
+
+    const command = resolveShortcutCommand(event, keybindings, {
+      platform: navigator.platform,
+      context: modelJumpShortcutContext,
+    });
+    const jumpIndex = modelPickerJumpIndexFromCommand(command ?? "");
+    if (jumpIndex === null) {
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+
+    const targetModelKey = modelJumpModelKeys[jumpIndex];
+    if (!targetModelKey) {
+      return;
+    }
+    const model = parseModelPickerModelKey(targetModelKey);
+    if (!model) {
+      return;
+    }
+    handleModelSelect(model.slug, model.instanceId);
+  });
+
   useEffect(() => {
-    const onWindowKeyDown = (event: globalThis.KeyboardEvent) => {
-      if (fusionSelection || event.defaultPrevented || event.repeat || isCommandPaletteOpen()) {
-        return;
-      }
-
-      const command = resolveShortcutCommand(event, keybindings, {
-        platform: navigator.platform,
-        context: modelJumpShortcutContext,
-      });
-      const jumpIndex = modelPickerJumpIndexFromCommand(command ?? "");
-      if (jumpIndex === null) {
-        return;
-      }
-      event.preventDefault();
-      event.stopPropagation();
-
-      const targetModelKey = modelJumpModelKeys[jumpIndex];
-      if (!targetModelKey) {
-        return;
-      }
-      const model = parseModelPickerModelKey(targetModelKey);
-      if (!model) {
-        return;
-      }
-      handleModelSelect(model.slug, model.instanceId);
-    };
-
     window.addEventListener("keydown", onWindowKeyDown, true);
 
     return () => {
       window.removeEventListener("keydown", onWindowKeyDown, true);
     };
-  }, [
-    handleModelSelect,
-    keybindings,
-    modelJumpModelKeys,
-    modelJumpShortcutContext,
-    fusionSelection,
-  ]);
+  }, []);
 
+  // Remeasure when list contents change or the list remounts after leaving Fusion.
   useLayoutEffect(() => {
-    setShowTopScrollFade(false);
-    setShowBottomScrollFade(filteredItemKeys.length > 5);
+    if (isFusionPickerOpen) return;
     let nestedFrame = 0;
     const frame = window.requestAnimationFrame(() => {
       updateModelListScrollFades();
@@ -761,7 +766,7 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
       window.cancelAnimationFrame(frame);
       window.cancelAnimationFrame(nestedFrame);
     };
-  }, [filteredItemKeys, updateModelListScrollFades]);
+  }, [filteredItemKeys, isFusionPickerOpen, updateModelListScrollFades]);
 
   if (fusionSelection) {
     const instanceId = fusionSelection.instanceId;
@@ -778,10 +783,7 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
         models={models}
         model={fusionSelection.model}
         providerName={entryByInstanceId.get(instanceId)?.displayName ?? "Devin"}
-        onBack={() => {
-          setFusionSelection(null);
-          window.requestAnimationFrame(focusSearchInput);
-        }}
+        onBack={() => setFusionSelection(null)}
         onSelect={(model) => onInstanceModelChange(instanceId, model)}
       />
     );
