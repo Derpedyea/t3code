@@ -271,6 +271,11 @@ describe("mobile model options", () => {
         {
           instanceId: selection.instanceId,
           driver,
+          modelPolicy: {
+            catalogScope: "instance",
+            preserveUnavailableModels: true,
+            optionSelection: "exact",
+          },
           displayName: "Google Work",
           enabled: true,
           installed: true,
@@ -279,6 +284,20 @@ describe("mobile model options", () => {
         },
       ],
     } as unknown as ServerConfig;
+
+    it("normalizes options when an instance catalog does not require exact variants", () => {
+      const ordinaryConfig = {
+        ...config,
+        providers: config.providers.map((provider) => ({
+          ...provider,
+          modelPolicy: { catalogScope: "instance", preserveUnavailableModels: true } as const,
+        })),
+      };
+      expect(buildModelOptions(ordinaryConfig, selection)[0]?.selection).toEqual({
+        ...selection,
+        options: [{ id: "native-option", value: "current/default" }],
+      });
+    });
 
     it("accepts advertised aliases without changing the saved model or options", () => {
       const aliasSelection = { ...selection, model: "catalog-alias" };

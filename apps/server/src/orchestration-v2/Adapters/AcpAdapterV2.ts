@@ -5777,7 +5777,7 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
               runtime,
               startResult,
               modelSelection,
-              cwd: input.runtimePolicy.cwd ?? process.cwd(),
+              cwd: runtimePolicy.cwd ?? process.cwd(),
             });
           } else if (
             requestedModel.length > 0 &&

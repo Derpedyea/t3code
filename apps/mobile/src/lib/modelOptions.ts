@@ -7,10 +7,7 @@ import type {
   ServerProvider,
   ServerConfig as T3ServerConfig,
 } from "@t3tools/contracts";
-import {
-  buildExplicitProviderOptionSelectionsFromDescriptors,
-  getProviderOptionDescriptors,
-} from "@t3tools/shared/model";
+import { resolveProviderModelOptions } from "@t3tools/client-runtime/providerModelOptions";
 
 export type ModelOption = {
   readonly key: string;
@@ -51,17 +48,14 @@ function providerDisplayLabel(provider: {
 function normalizeSelectionOptions(
   selection: ModelSelection,
   capabilities: ModelCapabilities | null,
+  modelPolicy: ServerProvider["modelPolicy"],
 ): ModelSelection {
-  if (!capabilities) {
-    return selection;
-  }
-  const options = buildExplicitProviderOptionSelectionsFromDescriptors(
-    getProviderOptionDescriptors({
-      caps: capabilities,
-      selections: selection.options,
-    }),
+  const { selections: options } = resolveProviderModelOptions(
+    capabilities,
     selection.options,
+    modelPolicy,
   );
+  if (options === selection.options) return selection;
   return options
     ? { ...selection, options }
     : {
@@ -108,7 +102,7 @@ export function isModelSelectionUnavailable(
 }
 
 /**
- * Keep instance-catalog selections when setup or catalog changes make them
+ * Keep selections marked for preservation when setup or catalog changes make them
  * unavailable. Other providers fall through to the server default when they
  * are disabled, missing, or signed out. Without config, keep stored selections.
  */
@@ -124,7 +118,7 @@ export function resolveSelectableModelSelection(
   );
   if (
     resolveProviderModelPolicy(provider ?? config.settings?.providerInstances[selection.instanceId])
-      .catalogScope === "instance"
+      .preserveUnavailableModels
   ) {
     return selection;
   }
@@ -137,7 +131,7 @@ export function resolveSelectableModelSelection(
 }
 
 /**
- * Reject legacy models for implicit defaults, except instance-catalog selections,
+ * Reject legacy models for implicit defaults, except preserved selections,
  * which must not silently change after a catalog update. Explicit picks in
  * the settings sheet are unaffected.
  */
@@ -153,8 +147,7 @@ export function resolveDefaultableModelSelection(
   const model = provider?.models.find(
     (candidate) => candidate.slug === usable.model || candidate.aliases?.includes(usable.model),
   );
-  return resolveProviderModelPolicy(provider).catalogScope !== "instance" &&
-    model?.isLegacy === true
+  return !resolveProviderModelPolicy(provider).preserveUnavailableModels && model?.isLegacy === true
     ? null
     : usable;
 }
@@ -218,6 +211,7 @@ export function buildModelOptions(
             model: model.slug,
           },
           model.capabilities,
+          provider.modelPolicy,
         ),
       });
     }
@@ -237,10 +231,11 @@ export function buildModelOptions(
     if (existing) {
       options.set(key, {
         ...existing,
-        selection:
-          existing.modelPolicy?.catalogScope === "instance"
-            ? fallbackModelSelection
-            : normalizeSelectionOptions(fallbackModelSelection, existing.capabilities),
+        selection: normalizeSelectionOptions(
+          fallbackModelSelection,
+          existing.capabilities,
+          existing.modelPolicy,
+        ),
       });
     } else {
       const instanceConfig = config?.settings?.providerInstances[fallbackModelSelection.instanceId];

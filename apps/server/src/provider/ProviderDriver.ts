@@ -76,7 +76,10 @@ export interface ProviderInstance {
   readonly accentColor?: string | undefined;
   readonly enabled: boolean;
   readonly snapshot: ServerProviderShape;
-  readonly snapshotForCwd?: (cwd: string) => Effect.Effect<ServerProvider, ProviderDriverError>;
+  /** Null means workspace discovery is not ready and must be retried instead of cached. */
+  readonly snapshotForCwd?:
+    | ((cwd: string) => Effect.Effect<ServerProvider | null, ProviderDriverError>)
+    | undefined;
   readonly refreshModels?: () => Effect.Effect<void, ProviderDriverError>;
   /**
    * Redeem one banked rate-limit reset credit on the signed-in account, then

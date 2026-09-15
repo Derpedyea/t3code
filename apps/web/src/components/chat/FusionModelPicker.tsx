@@ -4,7 +4,7 @@ import { Button } from "../ui/button";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { DevinIcon } from "../Icons";
 import { composerFloatingLayerProps } from "./composerEventScope";
-import { findFusionLeadPairing } from "./fusionModelPicker";
+import { getFusionChoices } from "@t3tools/client-runtime/fusionModels";
 import { FusionWave } from "./FusionWave";
 import type { ModelEsque } from "./providerIconUtils";
 
@@ -19,18 +19,7 @@ export function FusionModelPicker(props: {
   const [selectedSlug, setSelectedSlug] = useState(props.model);
   const selected = props.models.find((model) => model.slug === selectedSlug);
   const pairing = selected?.fusion;
-  const leads = [
-    ...new Map(
-      props.models.flatMap((model) =>
-        model.fusion ? [[model.fusion.lead.id, model.fusion.lead] as const] : [],
-      ),
-    ).values(),
-  ];
-  const sidekicks = props.models.flatMap((model) =>
-    model.fusion?.lead.id === pairing?.lead.id && model.fusion
-      ? [{ ...model.fusion.sidekick, id: model.slug }]
-      : [],
-  );
+  const choices = selected ? getFusionChoices(props.models, selected) : { lead: [], sidekick: [] };
 
   return (
     <div className="w-128 max-w-[calc(100vw-2rem)] bg-popover" data-model-picker-content="true">
@@ -53,7 +42,7 @@ export function FusionModelPicker(props: {
                     if (!value) return;
                     const slug =
                       role === "lead"
-                        ? findFusionLeadPairing(props.models, value, pairing.sidekick.id)?.slug
+                        ? choices.lead.find((model) => model.fusion?.lead.id === value)?.slug
                         : value;
                     if (slug) setSelectedSlug(slug);
                   }}
@@ -66,9 +55,12 @@ export function FusionModelPicker(props: {
                     <SelectValue className="truncate">{pairing[role].name}</SelectValue>
                   </SelectTrigger>
                   <SelectPopup {...composerFloatingLayerProps} data-model-picker-content="true">
-                    {(role === "lead" ? leads : sidekicks).map((choice) => (
-                      <SelectItem key={choice.id} value={choice.id}>
-                        {choice.name}
+                    {choices[role].map((choice) => (
+                      <SelectItem
+                        key={choice.slug}
+                        value={role === "lead" ? choice.fusion?.lead.id : choice.slug}
+                      >
+                        {choice.fusion?.[role].name}
                       </SelectItem>
                     ))}
                   </SelectPopup>

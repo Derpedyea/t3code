@@ -1,5 +1,5 @@
+import { resolveProviderModelOptions } from "@t3tools/client-runtime/providerModelOptions";
 import {
-  resolveProviderModelPolicy,
   type ProviderDriverKind,
   type ProviderInstanceId,
   type ProviderOptionDescriptor,
@@ -13,7 +13,6 @@ import {
   buildProviderOptionSelectionsFromDescriptors,
   getProviderOptionCurrentLabel,
   getProviderOptionCurrentValue,
-  getProviderOptionDescriptors,
   isClaudeUltrathinkPrompt,
   normalizeModelSlug,
 } from "@t3tools/shared/model";
@@ -155,12 +154,7 @@ function getSelectedTraits(
           ? modelOptions
           : modelOptions?.filter((option) => option.id !== "agent" || option.value !== "plan"),
       )
-    : getProviderOptionDescriptors({
-        caps,
-        selections: modelOptions,
-        preserveUnavailableSelections:
-          resolveProviderModelPolicy({ driver: provider, modelPolicy }).optionSelection === "exact",
-      });
+    : resolveProviderModelOptions(caps, modelOptions, modelPolicy).descriptors;
   const selectDescriptors = descriptors.filter(
     (descriptor): descriptor is Extract<ProviderOptionDescriptor, { type: "select" }> =>
       descriptor.type === "select",

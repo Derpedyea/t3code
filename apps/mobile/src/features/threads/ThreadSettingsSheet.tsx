@@ -1,5 +1,5 @@
 import { FusionModelEditor } from "./FusionModelEditor";
-import { collapseFusionOptions } from "./fusion-model-options";
+import { collapseFusionModels } from "@t3tools/client-runtime/fusionModels";
 import type {
   EnvironmentId,
   ModelSelection,
@@ -14,7 +14,6 @@ import { HeaderHeightContext } from "@react-navigation/elements";
 import {
   getProviderOptionCurrentLabel,
   getProviderOptionCurrentValue,
-  getProviderOptionDescriptors,
 } from "@t3tools/shared/model";
 import { useNavigation, useRoute, type RouteProp } from "@react-navigation/native";
 import {
@@ -438,13 +437,11 @@ function ThreadSettingsSessionProvider(
   const displayedDescriptors = useMemo(
     () =>
       pendingModel
-        ? pendingModel.capabilities
-          ? getProviderOptionDescriptors({
-              caps: pendingModel.capabilities,
-              selections: pendingModel.selection.options,
-              preserveUnavailableSelections: pendingModel.modelPolicy?.optionSelection === "exact",
-            })
-          : []
+        ? resolveProviderOptionDescriptors({
+            capabilities: pendingModel.capabilities,
+            selections: pendingModel.selection.options,
+            modelPolicy: pendingModel.modelPolicy,
+          })
         : props.optionDescriptors,
     [pendingModel, props.optionDescriptors],
   );
@@ -689,7 +686,7 @@ function useThreadSettingsCatalogItems(
         const catalogModels = session.showLegacy
           ? group.models
           : group.models.filter((model) => !model.isLegacy || isDisplayed(model));
-        const visibleModels = collapseFusionOptions(
+        const visibleModels = collapseFusionModels(
           catalogModels.filter((model) =>
             modelMatchesCatalogQuery({
               model,
@@ -697,6 +694,7 @@ function useThreadSettingsCatalogItems(
               query: session.searchQuery,
             }),
           ),
+          (model) => model.providerKey,
           isDisplayed,
         );
         if (visibleModels.length === 0) {

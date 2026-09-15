@@ -12,7 +12,7 @@ import {
   resolveModelPickerSelectedModel,
   shouldIncludeModelPickerOption,
   shouldOfferModelPickerSetup,
-} from "./ModelPickerContent";
+} from "./modelPickerLogic";
 
 function entry(status: ServerProvider["status"], driver = "opencode") {
   return deriveProviderInstanceEntries([

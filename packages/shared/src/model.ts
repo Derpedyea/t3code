@@ -202,23 +202,23 @@ export function getProviderOptionDescriptors(input: {
     for (const selection of selections ?? []) {
       const index = baseDescriptors.findIndex((descriptor) => descriptor.id === selection.id);
       const descriptor = baseDescriptors[index];
-      if (!descriptor) {
-        baseDescriptors.push(
-          Predicate.isBoolean(selection.value)
-            ? {
-                id: selection.id,
-                label: `${selection.id} (Unavailable)`,
-                type: "boolean",
-                currentValue: selection.value,
-              }
-            : {
-                id: selection.id,
-                label: selection.id,
-                type: "select",
-                currentValue: selection.value,
-                options: [{ id: selection.value, label: `${selection.value} (Unavailable)` }],
-              },
-        );
+      if (!descriptor || (descriptor.type === "boolean") !== Predicate.isBoolean(selection.value)) {
+        const unavailable: ProviderOptionDescriptor = Predicate.isBoolean(selection.value)
+          ? {
+              id: selection.id,
+              label: `${selection.id} (Unavailable)`,
+              type: "boolean",
+              currentValue: selection.value,
+            }
+          : {
+              id: selection.id,
+              label: selection.id,
+              type: "select",
+              currentValue: selection.value,
+              options: [{ id: selection.value, label: `${selection.value} (Unavailable)` }],
+            };
+        if (index < 0) baseDescriptors.push(unavailable);
+        else baseDescriptors[index] = unavailable;
       } else if (
         descriptor.type === "select" &&
         Predicate.isString(selection.value) &&

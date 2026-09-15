@@ -820,6 +820,24 @@ describe("instance-scoped model selection", () => {
     ).toEqual(createModelSelection(instanceId, "openai/gpt-5.5"));
   });
 
+  it("drops saved native options when settings fall back to another model", () => {
+    const instance = {
+      ...provider({ instanceId: "codex", models: ["gpt-5.6-luna"] }),
+      modelPolicy: { optionSelection: "exact" } as const,
+    };
+    const settings = {
+      ...settingsWithProviderInstances(),
+      textGenerationModelSelection: {
+        instanceId: instance.instanceId,
+        model: "removed-model",
+        options: [{ id: "removed-option", value: "removed-value" }],
+      },
+    };
+    const selected = resolveAppModelSelectionState(settings, [instance]);
+    expect(selected.model).not.toBe("removed-model");
+    expect(selected.options).toBeUndefined();
+  });
+
   it("preserves custom provider instances in settings model selection", () => {
     const providers = [
       provider({

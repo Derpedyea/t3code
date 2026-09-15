@@ -98,7 +98,9 @@ describe("AcpRegistryAdapterV2", () => {
           name: "devin",
           platform: yield* HostProcessPlatform,
           source: `
+          import { appendFileSync as logCatalogProbe } from 'node:fs';
           if (process.argv.slice(2).join(' ') === 'models list --format json') {
+            logCatalogProbe(process.env.T3_ACP_REQUEST_LOG_PATH, 'models/list ' + process.cwd() + '\\n');
             console.log(JSON.stringify({ families: [{ slug: 'opus', family_label: 'Opus', variants: [
               { model_uid: 'fresh-native-model', label: 'Opus High' }
             ] }] })); process.exit(0);
@@ -122,7 +124,7 @@ describe("AcpRegistryAdapterV2", () => {
           idAllocator: yield* IdAllocatorV2,
           serverConfig: yield* ServerConfig,
           resolver: {
-            resolve: () =>
+            resolve: (_settings, requestedCwd) =>
               Effect.succeed({
                 agent: {
                   id: "devin",
@@ -135,7 +137,7 @@ describe("AcpRegistryAdapterV2", () => {
                 spawn: {
                   command,
                   args: ["acp"],
-                  cwd,
+                  cwd: requestedCwd,
                   env: { T3_ACP_REQUEST_LOG_PATH: requestLog, T3_ACP_SESSION_LIFECYCLE: "1" },
                 },
               }),
@@ -158,8 +160,27 @@ describe("AcpRegistryAdapterV2", () => {
           modelSelection,
           runtimePolicy,
         });
-        yield* runtime.ensureThread({ threadId, modelSelection, runtimePolicy });
+        const providerThread = yield* runtime.ensureThread({
+          threadId,
+          modelSelection,
+          runtimePolicy,
+        });
+        const resumedCwd = path.join(cwd, "resumed-workspace");
+        yield* fileSystem.makeDirectory(resumedCwd);
+        yield* runtime.resumeThread({
+          providerThread: {
+            ...providerThread,
+            nativeThreadRef: {
+              driver: runtime.providerSession.driver,
+              nativeId: "mock-session-2",
+              strength: "strong",
+            },
+          },
+          modelSelection,
+          runtimePolicy: { ...runtimePolicy, cwd: resumedCwd },
+        });
         const requests = yield* fileSystem.readFileString(requestLog);
+        assert.include(requests, `models/list ${resumedCwd}`);
         assert.include(requests, '"value":"fresh-native-model"');
         assert.notInclude(requests, '"configId":"reasoningEffort"');
         assert.equal(runtime.providerSession.driver, "acpRegistry");

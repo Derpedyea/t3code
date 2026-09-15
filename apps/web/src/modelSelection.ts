@@ -441,7 +441,7 @@ export function resolveAppModelSelectionState(
       model,
       models: entry.models,
       modelPolicy: resolveProviderModelPolicy(entry.snapshot),
-      modelOptions: selectedEntry ? selection.options : undefined,
+      modelOptions: selectedEntry && model === selection.model ? selection.options : undefined,
       planModeEnabled: settings.planModeEnabled,
     });
 

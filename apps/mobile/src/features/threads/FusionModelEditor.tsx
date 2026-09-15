@@ -3,7 +3,7 @@ import { Pressable, ScrollView, View } from "react-native";
 import { AppText as Text } from "../../components/AppText";
 import { SymbolView } from "../../components/AppSymbol";
 import type { ModelOption } from "../../lib/modelOptions";
-import { fusionLeadPairing } from "./fusion-model-options";
+import { getFusionChoices } from "@t3tools/client-runtime/fusionModels";
 
 export function FusionModelEditor(props: {
   readonly models: ReadonlyArray<ModelOption>;
@@ -22,15 +22,7 @@ export function FusionModelEditor(props: {
     );
   }
   const pairing = selected.fusion;
-  const choices = editing
-    ? [
-        ...new Map(
-          available
-            .filter((model) => editing === "lead" || model.fusion?.lead.id === pairing.lead.id)
-            .map((model) => [model.fusion?.[editing].id, model]),
-        ).values(),
-      ]
-    : [];
+  const choices = getFusionChoices(available, selected);
 
   return (
     <ScrollView
@@ -74,17 +66,13 @@ export function FusionModelEditor(props: {
             </Pressable>
             {editing === role ? (
               <View className="overflow-hidden rounded-2xl bg-card">
-                {choices.map((model) => (
+                {choices[role].map((model) => (
                   <Pressable
                     key={model.key}
                     accessibilityRole="radio"
                     accessibilityState={{ checked: model.fusion?.[role].id === pairing[role].id }}
                     onPress={() => {
-                      const next =
-                        role === "lead"
-                          ? fusionLeadPairing(available, selected, model.fusion?.lead.id ?? "")
-                          : model;
-                      if (next) setSelectedKey(next.key);
+                      setSelectedKey(model.key);
                       setEditing(null);
                     }}
                     className="min-h-12 flex-row items-center gap-3 px-4 py-3 active:bg-subtle"

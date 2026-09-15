@@ -1,5 +1,4 @@
 import {
-  resolveProviderModelPolicy,
   ANTIGRAVITY_DEFAULT_MODEL,
   type ProviderInstanceId,
   type ProviderDriverKind,
@@ -13,17 +12,22 @@ import {
   useMemo,
   useState,
   useCallback,
-  useEffect,
-  useEffectEvent,
+  type KeyboardEvent,
   useLayoutEffect,
   useRef,
 } from "react";
 import { ChevronRightIcon, SearchIcon } from "lucide-react";
-import { FusionModelPicker } from "./FusionModelPicker";
-import { collapseFusionModels } from "./fusionModelPicker";
+import { collapseFusionModels } from "@t3tools/client-runtime/fusionModels";
+import {
+  adjacentModelPickerProvider,
+  resolveModelPickerSelectedModel,
+  shouldIncludeModelPickerOption,
+  shouldOfferModelPickerSetup,
+  modelPickerInstanceMatchesLock,
+} from "./modelPickerLogic";
 import { ModelListRow } from "./ModelListRow";
 import { ModelPickerSidebar } from "./ModelPickerSidebar";
-import { getProviderStatusMessage, hasProviderSetup } from "./ProviderStatusBanner";
+import { getProviderStatusMessage } from "./ProviderStatusBanner";
 import {
   modelPickerLegacySectionKey,
   modelPickerModelKey,
@@ -59,14 +63,8 @@ import {
 } from "../../providerInstances";
 import { providerModelKey, sortProviderModelItems } from "../../modelOrdering";
 
-type ModelPickerItem = {
+type ModelPickerItem = ModelEsque & {
   isFusionGroup?: boolean;
-  fusion?: ModelEsque["fusion"];
-  slug: string;
-  name: string;
-  shortName?: string;
-  subProvider?: string;
-  badge?: "new";
   instanceId: ProviderInstanceId;
   driverKind: ProviderDriverKind;
   instanceDisplayName: string;
@@ -74,88 +72,7 @@ type ModelPickerItem = {
   acpRegistryAgentId?: string | undefined;
   acpRegistryIconUrl?: string | undefined;
   continuationGroupKey?: string | undefined;
-  isLegacy?: boolean | undefined;
-  isUnavailable?: boolean | undefined;
 };
-
-export function resolveModelPickerSelectedModel(input: {
-  driverKind: ProviderDriverKind | undefined;
-  model: string;
-  options: ReadonlyArray<ModelEsque>;
-}) {
-  if (input.driverKind === "antigravity" && input.model === ANTIGRAVITY_DEFAULT_MODEL) {
-    const availableModels = input.options.filter(
-      (option) => option.slug !== ANTIGRAVITY_DEFAULT_MODEL && !option.isUnavailable,
-    );
-    return (
-      availableModels.find((option) => option.aliases?.includes(ANTIGRAVITY_DEFAULT_MODEL)) ??
-      availableModels.find((option) => option.isDefault)
-    );
-  }
-  return input.options.find((option) => option.slug === input.model);
-}
-
-export function shouldIncludeModelPickerOption(input: {
-  readonly entry: ProviderInstanceEntry;
-  readonly option: ModelEsque;
-  readonly activeInstanceId: ProviderInstanceId;
-  readonly activeModel: string;
-}): boolean {
-  if (input.entry.driverKind === "antigravity" && input.option.slug === ANTIGRAVITY_DEFAULT_MODEL) {
-    return false;
-  }
-  if (isProviderInstancePickerReady(input.entry)) return true;
-  return (
-    input.entry.enabled &&
-    resolveProviderModelPolicy(input.entry.snapshot).preserveUnavailableModels === true &&
-    input.entry.instanceId === input.activeInstanceId &&
-    input.option.slug === input.activeModel &&
-    input.option.isUnavailable === true
-  );
-}
-
-export function shouldOfferModelPickerSetup(
-  entry: ProviderInstanceEntry,
-  options: ReadonlyArray<ModelEsque>,
-): boolean {
-  return (
-    entry.enabled &&
-    entry.status !== "disabled" &&
-    hasProviderSetup(entry.snapshot) &&
-    (!isProviderInstancePickerReady(entry) ||
-      !entry.installed ||
-      entry.snapshot.auth.status === "unauthenticated" ||
-      !options.some((option) => !option.isUnavailable))
-  );
-}
-
-export function adjacentModelPickerProvider(input: {
-  entries: ReadonlyArray<ProviderInstanceEntry>;
-  selectedInstanceId: ProviderInstanceId | "favorites";
-  direction: 1 | -1;
-  disabledInstanceIds: ReadonlySet<ProviderInstanceId> | undefined;
-  selectableUnavailableInstanceIds: ReadonlySet<ProviderInstanceId> | undefined;
-}) {
-  const providers: Array<ProviderInstanceId | "favorites"> = [
-    "favorites",
-    ...input.entries
-      .filter(
-        (entry) =>
-          !input.disabledInstanceIds?.has(entry.instanceId) &&
-          (isProviderInstancePickerReady(entry) ||
-            input.selectableUnavailableInstanceIds?.has(entry.instanceId)),
-      )
-      .map((entry) => entry.instanceId),
-  ];
-  const index = providers.indexOf(input.selectedInstanceId);
-  return providers[
-    index < 0
-      ? input.direction === 1
-        ? 0
-        : providers.length - 1
-      : (index + input.direction + providers.length) % providers.length
-  ]!;
-}
 
 const EMPTY_MODEL_JUMP_LABELS = new Map<string, string>();
 
@@ -163,7 +80,7 @@ function ModelListSeparator() {
   return <div className="h-0.5" />;
 }
 
-export const ModelPickerContent = memo(function ModelPickerContent(props: {
+export type ModelPickerProps = {
   /** The instance currently selected in the composer (combobox "value"). */
   activeInstanceId: ProviderInstanceId;
   model: string;
@@ -195,13 +112,20 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
   onOpenProviderSetup?: (instanceId: ProviderInstanceId) => void;
   getModelDisabledReason?: (instanceId: ProviderInstanceId, model: string) => string | null;
   onInstanceModelChange: (instanceId: ProviderInstanceId, model: string) => void;
-}) {
+};
+
+export const ModelPickerContent = memo(function ModelPickerContent(
+  props: ModelPickerProps & {
+    onOpenFusion: (instanceId: ProviderInstanceId, model: string) => void;
+  },
+) {
   const {
     keybindings: providedKeybindings,
     modelOptionsByInstance,
     instanceEntries,
     getModelDisabledReason,
     onInstanceModelChange,
+    onOpenFusion,
   } = props;
   const [searchQuery, setSearchQuery] = useState("");
   const [showTopScrollFade, setShowTopScrollFade] = useState(false);
@@ -218,15 +142,6 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
     model: props.model,
     options: modelOptionsByInstance.get(props.activeInstanceId) ?? [],
   });
-  const [fusionSelection, setFusionSelection] = useState<{
-    instanceId: ProviderInstanceId;
-    model: string;
-  } | null>(() =>
-    activeModel?.fusion && !activeModel.isUnavailable
-      ? { instanceId: props.activeInstanceId, model: activeModel.slug }
-      : null,
-  );
-  const isFusionPickerOpen = fusionSelection !== null;
   const activeModelSlug =
     activeModel?.slug ?? (props.model === ANTIGRAVITY_DEFAULT_MODEL ? "" : props.model);
   const activeModelKey = activeModelSlug
@@ -292,7 +207,6 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
   );
 
   useLayoutEffect(() => {
-    if (isFusionPickerOpen) return;
     focusSearchInput();
     const frame = window.requestAnimationFrame(() => {
       focusSearchInput();
@@ -304,7 +218,7 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
       window.cancelAnimationFrame(frame);
       window.clearTimeout(timeout);
     };
-  }, [focusSearchInput, isFusionPickerOpen]);
+  }, [focusSearchInput]);
 
   // Create a Set for efficient lookup. Favorites are keyed by
   // `${instanceId}:${slug}`; the storage schema widened from ProviderDriverKind
@@ -326,10 +240,11 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
   );
   const matchesLockedProvider = useCallback(
     (entry: Pick<ProviderInstanceEntry, "driverKind" | "continuationGroupKey">): boolean => {
-      if (props.lockedProvider === null) return true;
-      if (entry.driverKind !== props.lockedProvider) return false;
-      if (!props.lockedContinuationGroupKey) return true;
-      return entry.continuationGroupKey === props.lockedContinuationGroupKey;
+      return modelPickerInstanceMatchesLock(
+        entry,
+        props.lockedProvider,
+        props.lockedContinuationGroupKey,
+      );
     },
     [props.lockedContinuationGroupKey, props.lockedProvider],
   );
@@ -443,94 +358,43 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
 
   // Filter models based on search query and selected instance
   const matchingModels = useMemo(() => {
-    let result = flatModels;
+    const available = flatModels.filter(matchesLockedProvider);
 
-    // Apply tokenized fuzzy search across the combined provider/model search fields.
+    // Search across accounts; the sidebar only limits the unfiltered catalog.
     if (searchQuery.trim()) {
-      const rankedMatches = result
-        .map((model) => ({
-          model,
-          score: scoreModelPickerSearch(
-            {
-              name: model.name,
-              ...(model.shortName ? { shortName: model.shortName } : {}),
-              ...(model.subProvider ? { subProvider: model.subProvider } : {}),
-              driverKind: model.driverKind,
-              providerDisplayName: model.instanceDisplayName,
-              isFavorite: favoritesSet.has(providerModelKey(model.instanceId, model.slug)),
-            },
-            searchQuery,
-          ),
-          isFavorite: favoritesSet.has(providerModelKey(model.instanceId, model.slug)),
-          tieBreaker: buildModelPickerSearchText({
-            name: model.name,
-            ...(model.shortName ? { shortName: model.shortName } : {}),
-            ...(model.subProvider ? { subProvider: model.subProvider } : {}),
-            driverKind: model.driverKind,
+      return available
+        .flatMap((model) => {
+          const searchable = {
+            ...model,
             providerDisplayName: model.instanceDisplayName,
-          }),
-        }))
-        .filter(
-          (
-            rankedModel,
-          ): rankedModel is {
-            model: ModelPickerItem;
-            score: number;
-            isFavorite: boolean;
-            tieBreaker: string;
-          } => rankedModel.score !== null,
-        );
-
-      // When searching, we only respect locked provider (by driver kind),
-      // ignoring sidebar selection so account-scoped searches can find a
-      // model before the user chooses a specific instance rail item.
-      if (props.lockedProvider !== null) {
-        const lockedProviderMatches: Array<(typeof rankedMatches)[number]> = [];
-        for (const rankedModel of rankedMatches) {
-          if (matchesLockedProvider(rankedModel.model)) {
-            lockedProviderMatches.push(rankedModel);
-          }
-        }
-        return lockedProviderMatches
-          .toSorted((a, b) => {
-            const scoreDelta = a.score - b.score;
-            if (scoreDelta !== 0) {
-              return scoreDelta;
-            }
-            if (a.isFavorite !== b.isFavorite) {
-              return a.isFavorite ? -1 : 1;
-            }
-            return a.tieBreaker.localeCompare(b.tieBreaker);
-          })
-          .map((rankedModel) => rankedModel.model);
-      }
-
-      return rankedMatches
-        .toSorted((a, b) => {
-          const scoreDelta = a.score - b.score;
-          if (scoreDelta !== 0) {
-            return scoreDelta;
-          }
-          if (a.isFavorite !== b.isFavorite) {
-            return a.isFavorite ? -1 : 1;
-          }
-          return a.tieBreaker.localeCompare(b.tieBreaker);
+            isFavorite: favoritesSet.has(providerModelKey(model.instanceId, model.slug)),
+          };
+          const score = scoreModelPickerSearch(searchable, searchQuery);
+          return score === null
+            ? []
+            : [
+                {
+                  model,
+                  score,
+                  isFavorite: searchable.isFavorite,
+                  tieBreaker: buildModelPickerSearchText(searchable),
+                },
+              ];
         })
-        .map((rankedModel) => rankedModel.model);
+        .toSorted(
+          (a, b) =>
+            a.score - b.score ||
+            Number(b.isFavorite) - Number(a.isFavorite) ||
+            a.tieBreaker.localeCompare(b.tieBreaker),
+        )
+        .map(({ model }) => model);
     }
 
-    if (props.lockedProvider !== null) {
-      result = result.filter((m) => matchesLockedProvider(m));
-      if (selectedInstanceId === "favorites") {
-        result = result.filter((m) => favoritesSet.has(providerModelKey(m.instanceId, m.slug)));
-      } else {
-        result = result.filter((m) => m.instanceId === selectedInstanceId);
-      }
-    } else if (selectedInstanceId === "favorites") {
-      result = result.filter((m) => favoritesSet.has(providerModelKey(m.instanceId, m.slug)));
-    } else {
-      result = result.filter((m) => m.instanceId === selectedInstanceId);
-    }
+    const result = available.filter((model) =>
+      selectedInstanceId === "favorites"
+        ? favoritesSet.has(providerModelKey(model.instanceId, model.slug))
+        : model.instanceId === selectedInstanceId,
+    );
 
     return sortProviderModelItems(result, {
       favoriteModelKeys: favoritesSet,
@@ -542,7 +406,6 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
     flatModels,
     instanceOrder,
     matchesLockedProvider,
-    props.lockedProvider,
     searchQuery,
     selectedInstanceId,
   ]);
@@ -551,7 +414,16 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
     () =>
       selectedInstanceId === "favorites" && !isSearching
         ? matchingModels
-        : collapseFusionModels(matchingModels, props.activeInstanceId, activeModelSlug),
+        : collapseFusionModels(
+            matchingModels,
+            (model) => model.instanceId,
+            (model) =>
+              model.instanceId === props.activeInstanceId && model.slug === activeModelSlug,
+          ).map((model) =>
+            model.fusion && !model.isUnavailable
+              ? { ...model, name: "Fusion", shortName: "Fusion", isFusionGroup: true }
+              : model,
+          ),
     [matchingModels, props.activeInstanceId, activeModelSlug, selectedInstanceId, isSearching],
   );
 
@@ -622,7 +494,7 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
         !option.isUnavailable &&
         (selectedInstanceId !== "favorites" || isSearching)
       ) {
-        setFusionSelection({ instanceId, model: modelSlug });
+        onOpenFusion(instanceId, modelSlug);
         return;
       }
       // `resolveSelectableModel` uses the driver kind for normalization
@@ -638,7 +510,7 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
       getModelDisabledReason,
       modelOptionsByInstance,
       onInstanceModelChange,
-      setFusionSelection,
+      onOpenFusion,
       selectedInstanceId,
       isSearching,
     ],
@@ -751,8 +623,8 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
     [favoritesSet, modelJumpLabelByKey],
   );
 
-  const onWindowKeyDown = useEffectEvent((event: globalThis.KeyboardEvent) => {
-    if (isFusionPickerOpen || event.defaultPrevented || event.repeat || isCommandPaletteOpen()) {
+  const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    if (event.defaultPrevented || event.repeat || isCommandPaletteOpen()) {
       return;
     }
 
@@ -790,50 +662,7 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
       return;
     }
     handleModelSelect(model.slug, model.instanceId);
-  });
-
-  useEffect(() => {
-    window.addEventListener("keydown", onWindowKeyDown, true);
-
-    return () => {
-      window.removeEventListener("keydown", onWindowKeyDown, true);
-    };
-  }, []);
-
-  // Remeasure when list contents change or the list remounts after leaving Fusion.
-  useLayoutEffect(() => {
-    if (isFusionPickerOpen) return;
-    let nestedFrame = 0;
-    const frame = window.requestAnimationFrame(() => {
-      updateModelListScrollFades();
-      nestedFrame = window.requestAnimationFrame(updateModelListScrollFades);
-    });
-    return () => {
-      window.cancelAnimationFrame(frame);
-      window.cancelAnimationFrame(nestedFrame);
-    };
-  }, [filteredItemKeys, isFusionPickerOpen, updateModelListScrollFades]);
-
-  if (fusionSelection) {
-    const instanceId = fusionSelection.instanceId;
-    const models = flatModels.filter(
-      (model) =>
-        model.instanceId === instanceId &&
-        model.fusion &&
-        !model.isUnavailable &&
-        matchesLockedProvider(model) &&
-        !getModelDisabledReason?.(instanceId, model.slug),
-    );
-    return (
-      <FusionModelPicker
-        models={models}
-        model={fusionSelection.model}
-        providerName={entryByInstanceId.get(instanceId)?.displayName ?? "Devin"}
-        onBack={() => setFusionSelection(null)}
-        onSelect={(model) => onInstanceModelChange(instanceId, model)}
-      />
-    );
-  }
+  };
 
   return (
     <TooltipProvider delay={0}>
@@ -843,6 +672,7 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
           filteredItemKeys.length === 1 && visibleModels[0]?.fusion && "h-30",
         )}
         data-model-picker-content="true"
+        onKeyDownCapture={handleKeyDown}
       >
         {/* Sidebar */}
         {showSidebar && (
@@ -1050,6 +880,7 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
                   recycleItems
                   contentContainerClassName="pl-2 pr-px"
                   ItemSeparatorComponent={ModelListSeparator}
+                  onLoad={updateModelListScrollFades}
                   onLayout={updateModelListScrollFades}
                   onScroll={updateModelListScrollFades}
                   className={cn(

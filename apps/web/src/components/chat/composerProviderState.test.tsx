@@ -1,6 +1,9 @@
+import { withImplicitFastModeDefault } from "@t3tools/client-runtime/providerModelOptions";
 import { describe, expect, it } from "vite-plus/test";
 import {
   ProviderDriverKind,
+  EnvironmentId,
+  ThreadId,
   type ProviderOptionDescriptor,
   type ProviderOptionSelection,
   type ServerProviderModel,
@@ -11,7 +14,6 @@ import {
   getComposerPromptInjectionState,
   getComposerProviderState,
   resolveProviderTraitsProps,
-  withImplicitFastModeDefault,
 } from "./composerProviderState";
 
 // Everything in composerProviderState is now data-driven by the model's
@@ -471,6 +473,21 @@ describe("trait controls fastMode display", () => {
 });
 
 describe("provider traits render guards", () => {
+  it("keeps unavailable OpenCode options available to the traits controls", () => {
+    const options = selections(["variant", "max"], ["agent", "build"]);
+    expect(
+      resolveProviderTraitsProps({
+        provider: ProviderDriverKind.make("opencode"),
+        model: "removed-model",
+        models: [],
+        modelOptions: options,
+        prompt: "",
+        planModeEnabled: false,
+        threadRef: { environmentId: EnvironmentId.make("test"), threadId: ThreadId.make("test") },
+      })?.modelOptions,
+    ).toEqual(options);
+  });
+
   it("returns null when no thread target is provided", () => {
     const models = modelWith([
       selectDescriptor("effort", [{ id: "high", label: "High", isDefault: true }]),

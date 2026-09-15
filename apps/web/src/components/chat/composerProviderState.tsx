@@ -1,6 +1,8 @@
 import {
-  resolveProviderModelPolicy,
-  type ModelCapabilities,
+  resolveProviderModelOptions,
+  withImplicitFastModeDefault,
+} from "@t3tools/client-runtime/providerModelOptions";
+import {
   type ProviderDriverKind,
   type ProviderInstanceId,
   type ProviderOptionSelection,
@@ -9,9 +11,7 @@ import {
   type ServerProvider,
 } from "@t3tools/contracts";
 import {
-  buildExplicitProviderOptionSelectionsFromDescriptors,
   getProviderOptionCurrentValue,
-  getProviderOptionDescriptors,
   isClaudeUltrathinkPrompt,
   normalizeModelSlug,
 } from "@t3tools/shared/model";
@@ -66,30 +66,6 @@ export function getComposerPromptInjectionState(prompt: string): ComposerPromptI
   return isClaudeUltrathinkPrompt(prompt) ? "ultrathink" : "none";
 }
 
-/**
- * Cursor ACP can report `fastMode: true` as the provider default. T3 only
- * treats Fast as selected when the user chose it (draft/sticky/settings).
- * Otherwise inject an explicit `false` so new chats stay Normal and the
- * send path can overwrite a prior Fast session — descriptor defaults are
- * otherwise omitted by `buildExplicitProviderOptionSelectionsFromDescriptors`.
- */
-export function withImplicitFastModeDefault(
-  caps: ModelCapabilities,
-  modelOptions: ReadonlyArray<ProviderOptionSelection> | null | undefined,
-): ReadonlyArray<ProviderOptionSelection> | undefined {
-  const hasExplicitFastMode = modelOptions?.some((selection) => selection.id === "fastMode");
-  if (hasExplicitFastMode) {
-    return modelOptions ?? undefined;
-  }
-  const hasFastModeDescriptor = caps.optionDescriptors?.some(
-    (descriptor) => descriptor.type === "boolean" && descriptor.id === "fastMode",
-  );
-  if (!hasFastModeDescriptor) {
-    return modelOptions ?? undefined;
-  }
-  return [...(modelOptions ?? []), { id: "fastMode", value: false }];
-}
-
 function resolveComposerOptionSelections(
   models: ReadonlyArray<ServerProviderModel>,
   model: string,
@@ -97,18 +73,9 @@ function resolveComposerOptionSelections(
   modelOptions: ReadonlyArray<ProviderOptionSelection> | null | undefined,
   planModeEnabled: boolean,
   modelPolicy: ServerProvider["modelPolicy"],
-): {
-  caps: ModelCapabilities;
-  selections: ReadonlyArray<ProviderOptionSelection> | undefined;
-} {
+) {
   const caps = getProviderModelCapabilities(models, model, provider, planModeEnabled);
-  return {
-    caps,
-    selections:
-      resolveProviderModelPolicy({ driver: provider, modelPolicy }).optionSelection === "exact"
-        ? (modelOptions ?? undefined)
-        : withImplicitFastModeDefault(caps, modelOptions),
-  };
+  return { caps, selections: withImplicitFastModeDefault(caps, modelOptions, modelPolicy) };
 }
 
 export function getComposerProviderState(input: ComposerProviderStateInput): ComposerProviderState {
@@ -136,7 +103,7 @@ export function getComposerProviderState(input: ComposerProviderStateInput): Com
       };
     }
   }
-  const { caps, selections } = resolveComposerOptionSelections(
+  const { caps, selections: explicitSelections } = resolveComposerOptionSelections(
     models,
     model,
     provider,
@@ -144,12 +111,11 @@ export function getComposerProviderState(input: ComposerProviderStateInput): Com
     planModeEnabled,
     modelPolicy,
   );
-  const descriptors = getProviderOptionDescriptors({
+  const { descriptors, selections } = resolveProviderModelOptions(
     caps,
-    selections,
-    preserveUnavailableSelections:
-      resolveProviderModelPolicy({ driver: provider, modelPolicy }).optionSelection === "exact",
-  });
+    explicitSelections,
+    modelPolicy,
+  );
   const primarySelectDescriptor = descriptors.find(
     (descriptor): descriptor is Extract<(typeof descriptors)[number], { type: "select" }> =>
       descriptor.type === "select",
@@ -163,10 +129,7 @@ export function getComposerProviderState(input: ComposerProviderStateInput): Com
   return {
     provider,
     promptEffort,
-    modelOptionsForDispatch: buildExplicitProviderOptionSelectionsFromDescriptors(
-      descriptors,
-      selections,
-    ),
+    modelOptionsForDispatch: selections,
     ...(ultrathinkActive
       ? {
           composerFrameClassName: "ultrathink-frame",
