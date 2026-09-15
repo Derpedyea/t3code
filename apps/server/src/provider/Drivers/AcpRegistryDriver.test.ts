@@ -45,6 +45,45 @@ function catalogWithInspection(inspection: AcpRegistryInspection): AcpRegistryCa
 }
 
 describe("acpRegistrySnapshotReadiness", () => {
+  it("keeps Devin family metadata when live ACP configuration advertises native IDs", () => {
+    const provider = buildCheckedAcpRegistrySnapshot({
+      ...identity,
+      settings: decodeSettings({ agentId: "devin" }),
+      checkedAt: "2026-09-14T12:00:00.000Z",
+      inspection: {
+        status: "ready",
+        agentId: "devin",
+        version: "3000.10.23",
+        distribution: "binary",
+      },
+    });
+    const models = [
+      {
+        slug: "fusion/opus/swe",
+        name: "Fusion (Opus + SWE)",
+        isCustom: false,
+        fusion: { lead: { id: "opus", name: "Opus" }, sidekick: { id: "swe", name: "SWE" } },
+        capabilities: { optionDescriptors: [] },
+      },
+    ];
+    const updated = applyAcpRegistryLiveConfiguration(
+      { ...provider, models },
+      {
+        models: [{ id: "native-fusion-id", name: "Native pairing", description: null }],
+        currentModelId: "native-fusion-id",
+        configOptions: [],
+      },
+      [],
+    );
+    expect(updated.models).toEqual(models);
+    expect(updated.modelPolicy).toEqual({
+      catalogScope: "instance",
+      preserveUnavailableModels: true,
+      optionSelection: "exact",
+    });
+    expect(updated.auth.status).toBe("authenticated");
+  });
+
   it("treats a live empty command advertisement as an authoritative replacement", () => {
     const provider = buildCheckedAcpRegistrySnapshot({
       ...identity,

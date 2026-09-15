@@ -15,6 +15,7 @@ import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
+import * as Path from "effect/Path";
 import * as Ref from "effect/Ref";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
@@ -59,6 +60,8 @@ import {
 } from "../acp/AcpRegistryProbe.ts";
 import { AcpRegistryCatalog, type AcpRegistryInspection } from "../acp/AcpRegistrySupport.ts";
 import { AcpRegistryRuntimeCoordinator } from "../acp/AcpRegistryRuntimeCoordinator.ts";
+import { discoverDevinSkills, readDevinModelCatalog } from "../acp/DevinCli.ts";
+import { devinModels } from "../acp/DevinModels.ts";
 
 const DRIVER_KIND = ProviderDriverKind.make("acpRegistry");
 const decodeSettings = Schema.decodeSync(AcpRegistrySettings);
@@ -207,6 +210,10 @@ function baseSnapshot(
     // so selectors must not offer these instances for commit, PR, branch, or
     // title generation.
     supportsTextGeneration: false,
+    modelPolicy:
+      input.settings.agentId === "devin"
+        ? { catalogScope: "instance", preserveUnavailableModels: true, optionSelection: "exact" }
+        : { catalogScope: "instance", preserveUnavailableModels: true },
     enabled: input.settings.enabled,
     installed: input.installed,
     version: input.version,
@@ -251,7 +258,12 @@ export function applyAcpRegistryLiveConfiguration(
     ...snapshot,
     status: provider.enabled ? "ready" : provider.status,
     auth: { ...provider.auth, status: "authenticated" },
-    models: modelsFromDiscovery(configuration, customModels),
+    // Devin's CLI catalog owns model families and exact variant options. ACP
+    // advertises cached native IDs and must not replace that richer catalog.
+    models:
+      provider.modelPolicy?.optionSelection === "exact"
+        ? provider.models
+        : modelsFromDiscovery(configuration, customModels),
   };
 }
 
@@ -463,6 +475,7 @@ export const AcpRegistryDriver: ProviderDriver<AcpRegistrySettings, AcpRegistryD
       }
       const crypto = yield* Crypto.Crypto;
       const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+      const path = yield* Path.Path;
       const hostEnvironment = yield* HostProcessEnvironment;
       const serverConfig = yield* ServerConfig;
       const serverSettings = yield* ServerSettingsService;
@@ -527,6 +540,7 @@ export const AcpRegistryDriver: ProviderDriver<AcpRegistrySettings, AcpRegistryD
         Effect.provideService(AcpRegistryCatalog, catalog),
         Effect.flatMap(withLiveRuntimeState),
       );
+      const lastDevinModels = yield* Ref.make<ReadonlyArray<ServerProviderModel>>([]);
       const enrichProvider = checkAcpRegistryProviderStatus(
         {
           ...readinessInput,
@@ -534,6 +548,36 @@ export const AcpRegistryDriver: ProviderDriver<AcpRegistrySettings, AcpRegistryD
         },
         probeAcpRegistryConfiguration,
       ).pipe(
+        Effect.flatMap((provider) => {
+          if (effectiveConfig.agentId !== "devin") {
+            return Effect.succeed(provider);
+          }
+          if (provider.auth.status !== "authenticated") {
+            return Ref.set(lastDevinModels, []).pipe(Effect.as(provider));
+          }
+          return catalog.resolve(effectiveConfig, serverConfig.cwd, processEnvironment).pipe(
+            Effect.flatMap(({ spawn }) => readDevinModelCatalog(spawn)),
+            Effect.map(devinModels),
+            Effect.tap((models) => Ref.set(lastDevinModels, models)),
+            Effect.catch((cause) =>
+              Effect.logWarning("Devin model discovery failed", cause).pipe(
+                Effect.andThen(Ref.get(lastDevinModels)),
+              ),
+            ),
+            Effect.map((models) =>
+              models.length === 0
+                ? provider
+                : {
+                    ...provider,
+                    models: providerModelsFromSettings(
+                      models,
+                      effectiveConfig.customModels,
+                      EMPTY_CAPABILITIES,
+                    ),
+                  },
+            ),
+          );
+        }),
         Effect.provideService(AcpRegistryCatalog, catalog),
         Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
         Effect.provideService(Crypto.Crypto, crypto),
@@ -718,6 +762,33 @@ export const AcpRegistryDriver: ProviderDriver<AcpRegistrySettings, AcpRegistryD
         accentColor,
         enabled,
         snapshot,
+        snapshotForCwd: (cwd) =>
+          snapshot.getSnapshot.pipe(
+            Effect.flatMap((provider) => {
+              if (
+                effectiveConfig.agentId !== "devin" ||
+                !provider.enabled ||
+                provider.auth.status !== "authenticated"
+              ) {
+                return Effect.succeed(provider);
+              }
+              return catalog.resolve(effectiveConfig, cwd, processEnvironment).pipe(
+                Effect.flatMap(({ spawn }) => discoverDevinSkills(spawn)),
+                Effect.provideService(Path.Path, path),
+                Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+                Effect.map((skills) => ({ ...provider, skills })),
+                Effect.mapError(
+                  (cause) =>
+                    new ProviderDriverError({
+                      driver: DRIVER_KIND,
+                      instanceId,
+                      detail: "Failed to discover Devin workspace skills.",
+                      cause,
+                    }),
+                ),
+              );
+            }),
+          ),
         orchestrationAdapter,
         textGeneration: makeUnsupportedTextGeneration(),
         acpSessionManagement: {
@@ -786,6 +857,7 @@ export const AcpRegistryDriver: ProviderDriver<AcpRegistrySettings, AcpRegistryD
               Effect.tap(() =>
                 liveSnapshotSemaphore.withPermit(
                   invalidateEnrichmentCache.pipe(
+                    Effect.andThen(Ref.set(lastDevinModels, [])),
                     Effect.andThen(
                       Option.isSome(runtimeCoordinator)
                         ? Effect.all(

@@ -10,8 +10,7 @@ import { getProviderModelCapabilities } from "../../providerModels";
 import {
   getComposerPromptInjectionState,
   getComposerProviderState,
-  renderProviderTraitsMenuContent,
-  renderProviderTraitsPicker,
+  resolveProviderTraitsProps,
   withImplicitFastModeDefault,
 } from "./composerProviderState";
 
@@ -482,11 +481,44 @@ describe("provider traits render guards", () => {
       models,
       modelOptions: undefined,
       prompt: "",
-      onPromptChange: () => {},
       planModeEnabled: true,
     };
 
-    expect(renderProviderTraitsPicker(args)).toBeNull();
-    expect(renderProviderTraitsMenuContent(args)).toBeNull();
+    expect(resolveProviderTraitsProps(args)).toBeNull();
   });
+});
+
+it("preserves exact catalog options for an unknown driver", () => {
+  const modelOptions = selections(["reasoningEffort", "max"], ["fastMode", true]);
+  const models = modelWith([
+    selectDescriptor("reasoningEffort", [{ id: "high", label: "High", isDefault: true }]),
+  ]);
+  const state = getComposerProviderState({
+    provider: ProviderDriverKind.make("test-account-provider"),
+    modelPolicy: { optionSelection: "exact" },
+    model: MODEL,
+    models,
+    modelOptions,
+    planModeEnabled: false,
+  });
+  expect(state.modelOptionsForDispatch).toEqual(modelOptions);
+  const defaultState = getComposerProviderState({
+    provider: ProviderDriverKind.make("test-account-provider"),
+    modelPolicy: { optionSelection: "exact" },
+    model: MODEL,
+    models: modelWith([{ id: "fastMode", label: "Fast", type: "boolean", currentValue: true }]),
+    modelOptions: undefined,
+    planModeEnabled: false,
+  });
+  expect(defaultState.modelOptionsForDispatch).toBeUndefined();
+  const descriptors = getProviderOptionDescriptors({
+    caps: models[0]!.capabilities!,
+    selections: modelOptions,
+    preserveUnavailableSelections: true,
+  });
+  expect(descriptors[0]?.currentValue).toBe("max");
+  expect(descriptors[1]?.currentValue).toBe(true);
+  expect(descriptors[0]?.type === "select" && descriptors[0].options.at(-1)?.label).toContain(
+    "Unavailable",
+  );
 });

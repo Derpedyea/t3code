@@ -1,10 +1,12 @@
 import {
+  resolveProviderModelPolicy,
   type ModelCapabilities,
   type ProviderDriverKind,
   type ProviderInstanceId,
   type ProviderOptionSelection,
   type ScopedThreadRef,
   type ServerProviderModel,
+  type ServerProvider,
 } from "@t3tools/contracts";
 import {
   buildExplicitProviderOptionSelectionsFromDescriptors,
@@ -14,16 +16,16 @@ import {
   normalizeModelSlug,
 } from "@t3tools/shared/model";
 import type { VariantProps } from "class-variance-authority";
-import type { ReactNode } from "react";
 
 import type { buttonVariants } from "../ui/button";
 import type { DraftId } from "../../composerDraftStore";
 import { getProviderModelCapabilities } from "../../providerModels";
 import type { ComposerControlSize } from "./ComposerControl";
-import { shouldRenderTraitsControls, TraitsMenuContent, TraitsPicker } from "./TraitsPicker";
+import { shouldRenderTraitsControls } from "./TraitsPicker";
 
 export type ComposerProviderStateInput = {
   provider: ProviderDriverKind;
+  modelPolicy?: ServerProvider["modelPolicy"];
   model: string;
   models: ReadonlyArray<ServerProviderModel>;
   promptInjectionState?: ComposerPromptInjectionState;
@@ -44,6 +46,7 @@ export type ComposerProviderState = {
 
 type TraitsRenderInput = {
   provider: ProviderDriverKind;
+  modelPolicy?: ServerProvider["modelPolicy"];
   instanceId?: ProviderInstanceId;
   threadRef?: ScopedThreadRef;
   draftId?: DraftId;
@@ -51,7 +54,6 @@ type TraitsRenderInput = {
   models: ReadonlyArray<ServerProviderModel>;
   modelOptions: ReadonlyArray<ProviderOptionSelection> | undefined;
   prompt: string;
-  onPromptChange: (prompt: string) => void;
   planModeEnabled: boolean;
   size?: ComposerControlSize;
   hidden?: boolean;
@@ -94,12 +96,19 @@ function resolveComposerOptionSelections(
   provider: ProviderDriverKind,
   modelOptions: ReadonlyArray<ProviderOptionSelection> | null | undefined,
   planModeEnabled: boolean,
+  modelPolicy: ServerProvider["modelPolicy"],
 ): {
   caps: ModelCapabilities;
   selections: ReadonlyArray<ProviderOptionSelection> | undefined;
 } {
   const caps = getProviderModelCapabilities(models, model, provider, planModeEnabled);
-  return { caps, selections: withImplicitFastModeDefault(caps, modelOptions) };
+  return {
+    caps,
+    selections:
+      resolveProviderModelPolicy({ driver: provider, modelPolicy }).optionSelection === "exact"
+        ? (modelOptions ?? undefined)
+        : withImplicitFastModeDefault(caps, modelOptions),
+  };
 }
 
 export function getComposerProviderState(input: ComposerProviderStateInput): ComposerProviderState {
@@ -110,6 +119,7 @@ export function getComposerProviderState(input: ComposerProviderStateInput): Com
     modelOptions,
     promptInjectionState = "none",
     planModeEnabled,
+    modelPolicy,
   } = input;
   if (provider === "opencode") {
     const normalizedModel = normalizeModelSlug(model, provider);
@@ -132,8 +142,14 @@ export function getComposerProviderState(input: ComposerProviderStateInput): Com
     provider,
     modelOptions,
     planModeEnabled,
+    modelPolicy,
   );
-  const descriptors = getProviderOptionDescriptors({ caps, selections });
+  const descriptors = getProviderOptionDescriptors({
+    caps,
+    selections,
+    preserveUnavailableSelections:
+      resolveProviderModelPolicy({ driver: provider, modelPolicy }).optionSelection === "exact",
+  });
   const primarySelectDescriptor = descriptors.find(
     (descriptor): descriptor is Extract<(typeof descriptors)[number], { type: "select" }> =>
       descriptor.type === "select",
@@ -161,73 +177,39 @@ export function getComposerProviderState(input: ComposerProviderStateInput): Com
   };
 }
 
-function renderTraitsControl(
-  Component: typeof TraitsMenuContent | typeof TraitsPicker,
-  input: TraitsRenderInput,
-): ReactNode {
+/** Resolve visibility and model options without invoking render-time callbacks. */
+export function resolveProviderTraitsProps(input: TraitsRenderInput) {
   const {
     provider,
-    instanceId,
     threadRef,
     draftId,
     model,
     models,
     modelOptions,
     prompt,
-    onPromptChange,
     planModeEnabled,
-    size,
-    hidden,
-    triggerVariant,
-    triggerClassName,
-    isComposerOwned,
+    modelPolicy,
   } = input;
-  const hasTarget = threadRef !== undefined || draftId !== undefined;
-  const { selections: resolvedModelOptions } = resolveComposerOptionSelections(
+  const { selections } = resolveComposerOptionSelections(
     models,
     model,
     provider,
     modelOptions,
     planModeEnabled,
+    modelPolicy,
   );
   if (
-    !hasTarget ||
+    (threadRef === undefined && draftId === undefined) ||
     !shouldRenderTraitsControls({
       provider,
+      modelPolicy,
       models,
       model,
-      modelOptions: resolvedModelOptions,
+      modelOptions: selections,
       prompt,
       planModeEnabled,
     })
-  ) {
+  )
     return null;
-  }
-  return (
-    <Component
-      provider={provider}
-      {...(instanceId ? { instanceId } : {})}
-      models={models}
-      {...(threadRef ? { threadRef } : {})}
-      {...(draftId ? { draftId } : {})}
-      model={model}
-      modelOptions={resolvedModelOptions}
-      prompt={prompt}
-      onPromptChange={onPromptChange}
-      planModeEnabled={planModeEnabled}
-      {...(size !== undefined ? { size } : {})}
-      {...(hidden !== undefined ? { hidden } : {})}
-      {...(triggerVariant !== undefined ? { triggerVariant } : {})}
-      {...(triggerClassName !== undefined ? { triggerClassName } : {})}
-      {...(isComposerOwned ? { isComposerOwned } : {})}
-    />
-  );
-}
-
-export function renderProviderTraitsMenuContent(input: TraitsRenderInput): ReactNode {
-  return renderTraitsControl(TraitsMenuContent, input);
-}
-
-export function renderProviderTraitsPicker(input: TraitsRenderInput): ReactNode {
-  return renderTraitsControl(TraitsPicker, input);
+  return { ...input, modelOptions: selections };
 }

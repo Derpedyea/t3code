@@ -1,8 +1,10 @@
 import type { MenuAction } from "@react-native-menu/menu";
+import { resolveProviderModelPolicy } from "@t3tools/contracts";
 import type {
   ModelCapabilities,
   ModelSelection,
   RuntimeMode,
+  ServerProvider,
   ServerConfig as T3ServerConfig,
 } from "@t3tools/contracts";
 import {
@@ -23,6 +25,8 @@ export type ModelOption = {
   readonly isLegacy: boolean;
   readonly isUnavailable?: boolean;
   readonly capabilities: ModelCapabilities | null;
+  readonly modelPolicy?: ServerProvider["modelPolicy"];
+  readonly fusion?: ServerProvider["models"][number]["fusion"];
   readonly selection: ModelSelection;
 };
 
@@ -66,32 +70,45 @@ function normalizeSelectionOptions(
       };
 }
 
-/** Whether a known Antigravity selection needs setup or a different model. */
-export function isModelSelectionUnavailable(
+/** Explain how to recover a known account-model selection that is unavailable. */
+export function getModelSelectionUnavailableReason(
   config: T3ServerConfig | null | undefined,
   selection: ModelSelection | null | undefined,
-): boolean {
+): string | null {
   if (!config || !selection) {
-    return false;
+    return null;
   }
   const provider = config.providers.find(
     (candidate) => candidate.instanceId === selection.instanceId,
   );
-  const driver =
-    provider?.driver ?? config.settings?.providerInstances[selection.instanceId]?.driver;
-  return (
-    driver === "antigravity" &&
+  const instanceConfig = config.settings?.providerInstances[selection.instanceId];
+  if (
+    resolveProviderModelPolicy(provider ?? instanceConfig).catalogScope === "instance" &&
     (!provider ||
       !provider.enabled ||
       !provider.installed ||
       provider.auth.status === "unauthenticated" ||
       provider.availability === "unavailable" ||
-      !provider.models.some((model) => model.slug === selection.model))
-  );
+      !provider.models.some(
+        (model) => model.slug === selection.model || model.aliases?.includes(selection.model),
+      ))
+  ) {
+    const name = provider?.displayName ?? instanceConfig?.displayName;
+    const subject = name ? `${name} model` : "Model";
+    return `${subject} unavailable. Set up this provider on web or desktop, or choose another model.`;
+  }
+  return null;
+}
+
+export function isModelSelectionUnavailable(
+  config: T3ServerConfig | null | undefined,
+  selection: ModelSelection | null | undefined,
+): boolean {
+  return getModelSelectionUnavailableReason(config, selection) !== null;
 }
 
 /**
- * Keep Antigravity selections when setup or catalog changes make them
+ * Keep instance-catalog selections when setup or catalog changes make them
  * unavailable. Other providers fall through to the server default when they
  * are disabled, missing, or signed out. Without config, keep stored selections.
  */
@@ -105,9 +122,10 @@ export function resolveSelectableModelSelection(
   const provider = config.providers.find(
     (candidate) => candidate.instanceId === selection.instanceId,
   );
-  const driver =
-    provider?.driver ?? config.settings?.providerInstances[selection.instanceId]?.driver;
-  if (driver === "antigravity") {
+  if (
+    resolveProviderModelPolicy(provider ?? config.settings?.providerInstances[selection.instanceId])
+      .catalogScope === "instance"
+  ) {
     return selection;
   }
   return provider &&
@@ -119,7 +137,7 @@ export function resolveSelectableModelSelection(
 }
 
 /**
- * Reject legacy models for implicit defaults, except Antigravity selections,
+ * Reject legacy models for implicit defaults, except instance-catalog selections,
  * which must not silently change after a catalog update. Explicit picks in
  * the settings sheet are unaffected.
  */
@@ -132,8 +150,13 @@ export function resolveDefaultableModelSelection(
     return usable;
   }
   const provider = config.providers.find((candidate) => candidate.instanceId === usable.instanceId);
-  const model = provider?.models.find((candidate) => candidate.slug === usable.model);
-  return provider?.driver !== "antigravity" && model?.isLegacy === true ? null : usable;
+  const model = provider?.models.find(
+    (candidate) => candidate.slug === usable.model || candidate.aliases?.includes(usable.model),
+  );
+  return resolveProviderModelPolicy(provider).catalogScope !== "instance" &&
+    model?.isLegacy === true
+    ? null
+    : usable;
 }
 
 export function resolveNewTaskModelSelection(input: {
@@ -163,7 +186,7 @@ export function buildModelOptions(
       !provider.enabled ||
       !provider.installed ||
       provider.auth.status === "unauthenticated" ||
-      (provider.driver === "antigravity" && provider.availability === "unavailable")
+      provider.availability === "unavailable"
     ) {
       continue;
     }
@@ -173,8 +196,11 @@ export function buildModelOptions(
       const key = `${provider.instanceId}:${model.slug}`;
       options.set(key, {
         key,
-        label: model.name,
-        subtitle: model.subProvider ?? "",
+        label: model.fusion ? "Fusion" : model.name,
+        subtitle: model.fusion
+          ? `${model.fusion.lead.name} + ${model.fusion.sidekick.name}`
+          : (model.subProvider ?? ""),
+        fusion: model.fusion,
         providerKey: provider.instanceId,
         providerLabel,
         providerDriver: provider.driver,
@@ -185,6 +211,7 @@ export function buildModelOptions(
         isDefault: model.isDefault === true,
         isLegacy: model.isLegacy === true,
         capabilities: model.capabilities,
+        modelPolicy: resolveProviderModelPolicy(provider),
         selection: normalizeSelectionOptions(
           {
             instanceId: provider.instanceId,
@@ -197,24 +224,26 @@ export function buildModelOptions(
   }
 
   if (fallbackModelSelection) {
-    const key = `${fallbackModelSelection.instanceId}:${fallbackModelSelection.model}`;
+    const provider = config?.providers.find(
+      (candidate) => candidate.instanceId === fallbackModelSelection.instanceId,
+    );
+    const model =
+      provider?.models.find((candidate) => candidate.slug === fallbackModelSelection.model) ??
+      provider?.models.find((candidate) =>
+        candidate.aliases?.includes(fallbackModelSelection.model),
+      );
+    const key = `${fallbackModelSelection.instanceId}:${model?.slug ?? fallbackModelSelection.model}`;
     const existing = options.get(key);
     if (existing) {
       options.set(key, {
         ...existing,
         selection:
-          existing.providerDriver === "antigravity"
+          existing.modelPolicy?.catalogScope === "instance"
             ? fallbackModelSelection
             : normalizeSelectionOptions(fallbackModelSelection, existing.capabilities),
       });
     } else {
-      const provider = config?.providers.find(
-        (candidate) => candidate.instanceId === fallbackModelSelection.instanceId,
-      );
       const instanceConfig = config?.settings?.providerInstances[fallbackModelSelection.instanceId];
-      const model = provider?.models.find(
-        (candidate) => candidate.slug === fallbackModelSelection.model,
-      );
       const providerDriver =
         provider?.driver ?? instanceConfig?.driver ?? fallbackModelSelection.instanceId;
       const providerLabel = providerDisplayLabel({
@@ -224,8 +253,11 @@ export function buildModelOptions(
       });
       options.set(key, {
         key,
-        label: model?.name ?? fallbackModelSelection.model,
-        subtitle: model?.subProvider ?? "",
+        label: model?.fusion ? "Fusion" : (model?.name ?? fallbackModelSelection.model),
+        subtitle: model?.fusion
+          ? `${model.fusion.lead.name} + ${model.fusion.sidekick.name}`
+          : (model?.subProvider ?? ""),
+        fusion: model?.fusion,
         providerKey: fallbackModelSelection.instanceId,
         providerLabel,
         providerDriver,
@@ -235,6 +267,7 @@ export function buildModelOptions(
           ? { isUnavailable: true }
           : {}),
         capabilities: model?.capabilities ?? null,
+        modelPolicy: resolveProviderModelPolicy(provider ?? instanceConfig),
         selection: fallbackModelSelection,
       });
     }

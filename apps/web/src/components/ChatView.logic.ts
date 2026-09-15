@@ -612,9 +612,9 @@ export function resolveComposerProviderSelection(input: {
     ? (input.entries.find((entry) => entry.instanceId === input.lockedInstanceId)
         ?.continuationGroupKey ?? null)
     : null;
-  // Missing metadata must not move Antigravity history into another Google profile.
+  // Missing metadata must not move account-bound history into another account.
   const requiresExactInstance =
-    input.lockedProvider === "antigravity" &&
+    input.lockedProvider != null &&
     input.lockedInstanceId != null &&
     lockedContinuationGroupKey === null;
   const compatibleEntries = input.entries.filter(
