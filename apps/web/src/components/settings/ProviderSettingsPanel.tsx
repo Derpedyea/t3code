@@ -191,7 +191,8 @@ function providerEnvironmentDetail(environment: EnvironmentPresentation): string
 const providerCardClassName = "rounded-xl border border-border/60 bg-card/40 shadow-xs/5";
 // Shared by the editor grid and the placeholder states so switching devices
 // never changes the card's footprint.
-const providerCardHeightClassName = "lg:h-[min(44rem,calc(100dvh-11rem))] lg:min-h-[32rem]";
+const providerCardHeightClassName =
+  "@min-[48rem]/providers:h-[min(44rem,calc(100dvh-11rem))] @min-[48rem]/providers:min-h-[32rem]";
 
 /**
  * Same chrome as the provider editor (section heading, floating device tabs,
