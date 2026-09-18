@@ -66,7 +66,7 @@ const REVIEW_INITIAL_LANGUAGE_MODULES = [
   typescriptLanguage,
   yamlLanguage,
 ] satisfies Parameters<typeof createHighlighterCore>[0]["langs"];
-const loadedLanguages = new Set<string>([
+const REVIEW_INITIAL_LANGUAGE_NAMES = [
   "text",
   "bash",
   "javascript",
@@ -75,8 +75,39 @@ const loadedLanguages = new Set<string>([
   "tsx",
   "typescript",
   "yaml",
-]);
-const languageLoadingPromises = new Map<string, Promise<boolean>>();
+];
+
+type ReviewHighlighterSharedState = {
+  highlighterPromise: Promise<HighlighterCore> | null;
+  activeHighlighterEnginePromise: Promise<ReviewHighlighterEngine> | null;
+  loadedLanguages: Set<string>;
+  languageLoadingPromises: Map<string, Promise<boolean>>;
+};
+
+// Shiki warns against multiple highlighter instances and tokenization can
+// diverge when several instances initialize concurrently. Keep one shared
+// highlighter across module re-evaluation (Fast Refresh, test module resets)
+// so every caller tokenizes with the same grammars and themes.
+function getReviewHighlighterSharedState(): ReviewHighlighterSharedState {
+  const scope = globalThis as typeof globalThis & {
+    __t3ReviewHighlighterState?: ReviewHighlighterSharedState;
+  };
+  let state = scope.__t3ReviewHighlighterState;
+  if (!state) {
+    state = {
+      highlighterPromise: null,
+      activeHighlighterEnginePromise: null,
+      loadedLanguages: new Set<string>(REVIEW_INITIAL_LANGUAGE_NAMES),
+      languageLoadingPromises: new Map<string, Promise<boolean>>(),
+    };
+    scope.__t3ReviewHighlighterState = state;
+  }
+  return state;
+}
+
+const reviewHighlighterSharedState = getReviewHighlighterSharedState();
+const loadedLanguages = reviewHighlighterSharedState.loadedLanguages;
+const languageLoadingPromises = reviewHighlighterSharedState.languageLoadingPromises;
 const languageImports: Partial<Record<string, () => Promise<unknown>>> = {
   javascript: () => import("@shikijs/langs/javascript"),
   typescript: () => import("@shikijs/langs/typescript"),
@@ -180,8 +211,6 @@ const languageAliases: Record<string, string> = {
   plaintext: "text",
   txt: "text",
 };
-let highlighterPromise: Promise<HighlighterCore> | null = null;
-let activeHighlighterEnginePromise: Promise<ReviewHighlighterEngine> | null = null;
 
 type LoadedLanguageModule = {
   default: Parameters<HighlighterCore["loadLanguage"]>[0];
@@ -226,7 +255,7 @@ function waitForNextFrame(): Promise<void> {
 }
 
 async function getHighlighter(): Promise<HighlighterCore> {
-  if (!highlighterPromise) {
+  if (!reviewHighlighterSharedState.highlighterPromise) {
     const configuredHighlighterPromise = (async () => {
       let nativeEngineAvailable = false;
       let nativeInitializationError: ReviewHighlighterEngineInitializationError | undefined;
@@ -314,27 +343,29 @@ async function getHighlighter(): Promise<HighlighterCore> {
       };
     })();
 
-    highlighterPromise = configuredHighlighterPromise
+    reviewHighlighterSharedState.highlighterPromise = configuredHighlighterPromise
       .then((result) => result.highlighter)
       .catch((error) => {
-        highlighterPromise = null;
-        activeHighlighterEnginePromise = null;
+        reviewHighlighterSharedState.highlighterPromise = null;
+        reviewHighlighterSharedState.activeHighlighterEnginePromise = null;
         throw error;
       });
-    activeHighlighterEnginePromise = configuredHighlighterPromise
+    reviewHighlighterSharedState.activeHighlighterEnginePromise = configuredHighlighterPromise
       .then((result) => result.engine)
       .catch((error) => {
-        activeHighlighterEnginePromise = null;
+        reviewHighlighterSharedState.activeHighlighterEnginePromise = null;
         throw error;
       });
   }
 
-  return highlighterPromise;
+  return reviewHighlighterSharedState.highlighterPromise;
 }
 
 export async function getActiveReviewHighlighterEngine(): Promise<ReviewHighlighterEngine> {
   await getHighlighter();
-  return activeHighlighterEnginePromise ?? Promise.resolve("javascript");
+  return (
+    reviewHighlighterSharedState.activeHighlighterEnginePromise ?? Promise.resolve("javascript")
+  );
 }
 
 export async function prepareReviewHighlighter(): Promise<void> {
