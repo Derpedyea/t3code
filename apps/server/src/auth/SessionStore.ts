@@ -17,6 +17,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as PubSub from "effect/PubSub";
 import * as Ref from "effect/Ref";
+import * as Schedule from "effect/Schedule";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as Option from "effect/Option";
@@ -407,6 +408,7 @@ export class SessionStore extends Context.Service<
     readonly revokeAllExcept: (
       sessionId: AuthSessionId,
     ) => Effect.Effect<number, SessionCredentialInternalError>;
+    readonly awaitRevocation: (sessionId: AuthSessionId) => Effect.Effect<void>;
     readonly markConnected: (sessionId: AuthSessionId) => Effect.Effect<void, never>;
     readonly markDisconnected: (sessionId: AuthSessionId) => Effect.Effect<void, never>;
     readonly recordClientConnection: (
@@ -421,6 +423,8 @@ export class SessionStore extends Context.Service<
 
 const SIGNING_SECRET_NAME = "server-signing-key";
 const DEFAULT_SESSION_TTL = Duration.days(30);
+// Revocations written by another process, such as `t3 auth session revoke`, only reach the database.
+const REVOCATION_RECHECK_INTERVAL = Duration.seconds(30);
 const DEFAULT_WEBSOCKET_TOKEN_TTL = Duration.minutes(5);
 const SessionClaims = Schema.Struct({
   v: Schema.Literal(1),
@@ -534,6 +538,41 @@ export const make = Effect.gen(function* () {
       type: "clientRemoved",
       sessionId,
     }).pipe(Effect.asVoid);
+
+  const isRevoked = (sessionId: AuthSessionId) =>
+    authSessions.getById({ sessionId }).pipe(
+      Effect.map((row) => Option.isSome(row) && row.value.revokedAt !== null),
+      Effect.catch((cause) =>
+        Effect.logWarning("Failed to read session revocation state.").pipe(
+          Effect.annotateLogs({ sessionId, cause }),
+          Effect.as(false),
+        ),
+      ),
+    );
+
+  const awaitRevocation: SessionStore["Service"]["awaitRevocation"] = (sessionId) =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        // Subscribe before the first read so a revocation in between is not missed.
+        const changes = yield* PubSub.subscribe(changesPubSub);
+        yield* Effect.raceFirst(
+          Stream.fromSubscription(changes).pipe(
+            Stream.filter(
+              (change) => change.type === "clientRemoved" && change.sessionId === sessionId,
+            ),
+            Stream.mapEffect(() => isRevoked(sessionId)),
+            Stream.filter((revoked) => revoked),
+            Stream.runHead,
+          ),
+          isRevoked(sessionId).pipe(
+            Effect.repeat({
+              until: (revoked) => revoked,
+              schedule: Schedule.spaced(REVOCATION_RECHECK_INTERVAL),
+            }),
+          ),
+        );
+      }),
+    );
 
   const loadActiveSession = (sessionId: AuthSessionId) =>
     Effect.gen(function* () {
@@ -1044,6 +1083,7 @@ export const make = Effect.gen(function* () {
     },
     revoke,
     revokeAllExcept,
+    awaitRevocation,
     markConnected,
     markDisconnected,
     recordClientConnection,
