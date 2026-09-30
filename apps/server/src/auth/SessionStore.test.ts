@@ -1,8 +1,10 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { EnvironmentId } from "@t3tools/contracts";
 import { expect, it } from "@effect/vitest";
+import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -538,6 +540,39 @@ it.layer(NodeServices.layer)("SessionStore.layer", (it) => {
         expect(revokedClientWebSocket.revokedAt.epochMilliseconds).toBeGreaterThanOrEqual(0);
       }
     }).pipe(Effect.provide(makeSessionStoreLayer())),
+  );
+
+  it.effect("wakes revocation waiters, including after a replacing re-pair", () =>
+    Effect.gen(function* () {
+      const sessions = yield* SessionStore.SessionStore;
+      const pairing = { subject: "desktop-bootstrap", method: "bearer-access-token" } as const;
+      const replaced = yield* sessions.issue(pairing);
+      const waiter = yield* Effect.forkChild(sessions.awaitRevocation(replaced.sessionId), {
+        startImmediately: true,
+      });
+
+      yield* sessions.issue({ ...pairing, replaceActiveForSubjectAndMethod: true });
+      yield* Fiber.join(waiter);
+      // Waiting on an already revoked session returns without another signal.
+      yield* sessions.awaitRevocation(replaced.sessionId);
+    }).pipe(Effect.provide(makeSessionStoreLayer())),
+  );
+
+  it.effect("notices a revocation written by another process on the periodic re-read", () =>
+    Effect.gen(function* () {
+      const sessions = yield* SessionStore.SessionStore;
+      const repository = yield* AuthSessions.AuthSessionRepository;
+      const issued = yield* sessions.issue();
+      const waiter = yield* Effect.forkChild(sessions.awaitRevocation(issued.sessionId), {
+        startImmediately: true,
+      });
+      yield* TestClock.adjust("1 second");
+
+      // `t3 auth session revoke` against a running server writes only the database row.
+      yield* repository.revoke({ sessionId: issued.sessionId, revokedAt: yield* DateTime.now });
+      yield* TestClock.adjust("30 seconds");
+      yield* Fiber.join(waiter);
+    }).pipe(Effect.provide(Layer.merge(makeSessionStoreLayer(), TestClock.layer()))),
   );
 
   it.effect("persists lastConnectedAt on first connect and updates it after reconnect", () =>

@@ -5239,7 +5239,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
-  it.effect("revokes an individual paired client session", () =>
+  it.effect("revokes an individual paired client session and closes its open socket", () =>
     Effect.gen(function* () {
       yield* buildAppUnderTest({
         config: {
@@ -5259,6 +5259,20 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       };
       const pairedSessionCookie = yield* getAuthenticatedSessionCookieHeader(
         pairingBody.credential,
+      );
+      const pairedSocket = new NodeSocket.NodeWS.WebSocket(
+        yield* getWsServerUrl("/ws", { authenticated: false }),
+        { headers: { cookie: pairedSessionCookie } },
+      );
+      const pairedSocketClosed = new Promise<void>((resolve) =>
+        pairedSocket.once("close", () => resolve()),
+      );
+      yield* Effect.promise(
+        () =>
+          new Promise<void>((resolve, reject) => {
+            pairedSocket.once("open", () => resolve());
+            pairedSocket.once("error", reject);
+          }),
       );
 
       const clientsResponse = yield* HttpClient.get("/api/auth/clients", {
@@ -5289,6 +5303,8 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
 
       assert.equal(revokeResponse.status, 200);
       assert.equal(pairedClientPairingResponse.status, 401);
+      // The socket authorized before the revocation must not outlive it.
+      yield* Effect.promise(() => pairedSocketClosed);
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 

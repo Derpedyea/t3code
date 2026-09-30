@@ -17,6 +17,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as PubSub from "effect/PubSub";
 import * as Ref from "effect/Ref";
+import * as Schedule from "effect/Schedule";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as Option from "effect/Option";
@@ -407,6 +408,14 @@ export class SessionStore extends Context.Service<
     readonly revokeAllExcept: (
       sessionId: AuthSessionId,
     ) => Effect.Effect<number, SessionCredentialInternalError>;
+    /**
+     * Completes once the session is revoked, immediately if it already is.
+     * Long-lived connections authorize once at upgrade, so they race their
+     * work against this to drop a revoked client instead of serving it
+     * until it reconnects. Revocations from this process land at once; ones
+     * written by another process are seen on a periodic re-read.
+     */
+    readonly awaitRevocation: (sessionId: AuthSessionId) => Effect.Effect<void>;
     readonly markConnected: (sessionId: AuthSessionId) => Effect.Effect<void, never>;
     readonly markDisconnected: (sessionId: AuthSessionId) => Effect.Effect<void, never>;
     readonly recordClientConnection: (
@@ -421,6 +430,9 @@ export class SessionStore extends Context.Service<
 
 const SIGNING_SECRET_NAME = "server-signing-key";
 const DEFAULT_SESSION_TTL = Duration.days(30);
+// How often a live connection re-reads its session. Revocations written by
+// another process, such as `t3 auth session revoke`, only reach the database.
+const REVOCATION_RECHECK_INTERVAL = Duration.seconds(30);
 const DEFAULT_WEBSOCKET_TOKEN_TTL = Duration.minutes(5);
 const SessionClaims = Schema.Struct({
   v: Schema.Literal(1),
@@ -487,6 +499,7 @@ export const make = Effect.gen(function* () {
   const signingSecret = yield* secretStore.getOrCreateRandom(SIGNING_SECRET_NAME, 32);
   const connectedSessionsRef = yield* Ref.make(new Map<AuthSessionId, number>());
   const changesPubSub = yield* PubSub.unbounded<SessionCredentialChange>();
+  const revocationsPubSub = yield* PubSub.unbounded<AuthSessionId>();
   const cookieInput = {
     mode: serverConfig.mode,
     port: serverConfig.port,
@@ -534,6 +547,55 @@ export const make = Effect.gen(function* () {
       type: "clientRemoved",
       sessionId,
     }).pipe(Effect.asVoid);
+
+  // Every revocation path funnels through here so live connections always hear about it.
+  const onRevoked = (sessionIds: ReadonlyArray<AuthSessionId>) =>
+    Effect.gen(function* () {
+      yield* Ref.update(connectedSessionsRef, (current) => {
+        const next = new Map(current);
+        for (const sessionId of sessionIds) {
+          next.delete(sessionId);
+        }
+        return next;
+      });
+      yield* PubSub.publishAll(revocationsPubSub, sessionIds);
+      yield* Effect.forEach(sessionIds, emitRemoved, {
+        concurrency: "unbounded",
+        discard: true,
+      });
+    });
+
+  // A failed read keeps the connection; the next read or signal still ends it.
+  const isRevoked = (sessionId: AuthSessionId) =>
+    authSessions.getById({ sessionId }).pipe(
+      Effect.map((row) => Option.isSome(row) && row.value.revokedAt !== null),
+      Effect.catch((cause) =>
+        Effect.logWarning("Failed to read session revocation state.").pipe(
+          Effect.annotateLogs({ sessionId, cause }),
+          Effect.as(false),
+        ),
+      ),
+    );
+
+  const awaitRevocation: SessionStore["Service"]["awaitRevocation"] = (sessionId) =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        // Subscribe before the first read so a revocation landing in between is not missed.
+        const revocations = yield* PubSub.subscribe(revocationsPubSub);
+        yield* Effect.raceFirst(
+          Stream.fromSubscription(revocations).pipe(
+            Stream.filter((revokedSessionId) => revokedSessionId === sessionId),
+            Stream.runHead,
+          ),
+          isRevoked(sessionId).pipe(
+            Effect.repeat({
+              until: (revoked) => revoked,
+              schedule: Schedule.spaced(REVOCATION_RECHECK_INTERVAL),
+            }),
+          ),
+        );
+      }),
+    );
 
   const loadActiveSession = (sessionId: AuthSessionId) =>
     Effect.gen(function* () {
@@ -707,17 +769,7 @@ export const make = Effect.gen(function* () {
           : authSessions.create(sessionRecord).pipe(Effect.as([] as ReadonlyArray<AuthSessionId>))
       ).pipe(Effect.mapError((cause) => new SessionCredentialIssueError({ sessionId, cause })));
       if (replacedSessionIds.length > 0) {
-        yield* Ref.update(connectedSessionsRef, (current) => {
-          const next = new Map(current);
-          for (const replacedSessionId of replacedSessionIds) {
-            next.delete(replacedSessionId);
-          }
-          return next;
-        });
-        yield* Effect.forEach(replacedSessionIds, emitRemoved, {
-          concurrency: "unbounded",
-          discard: true,
-        });
+        yield* onRevoked(replacedSessionIds);
       }
       yield* emitUpsert(
         toAuthClientSession({
@@ -986,12 +1038,7 @@ export const make = Effect.gen(function* () {
         })
         .pipe(Effect.mapError((cause) => new SessionRevocationError({ sessionId, cause })));
       if (revoked) {
-        yield* Ref.update(connectedSessionsRef, (current) => {
-          const next = new Map(current);
-          next.delete(sessionId);
-          return next;
-        });
-        yield* emitRemoved(sessionId);
+        yield* onRevoked([sessionId]);
       }
       return revoked;
     },
@@ -1012,21 +1059,7 @@ export const make = Effect.gen(function* () {
         ),
       );
     if (revokedSessionIds.length > 0) {
-      yield* Ref.update(connectedSessionsRef, (current) => {
-        const next = new Map(current);
-        for (const revokedSessionId of revokedSessionIds) {
-          next.delete(revokedSessionId);
-        }
-        return next;
-      });
-      yield* Effect.forEach(
-        revokedSessionIds,
-        (revokedSessionId) => emitRemoved(revokedSessionId),
-        {
-          concurrency: "unbounded",
-          discard: true,
-        },
-      );
+      yield* onRevoked(revokedSessionIds);
     }
     return revokedSessionIds.length;
   });
@@ -1044,6 +1077,7 @@ export const make = Effect.gen(function* () {
     },
     revoke,
     revokeAllExcept,
+    awaitRevocation,
     markConnected,
     markDisconnected,
     recordClientConnection,
