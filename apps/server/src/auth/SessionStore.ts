@@ -539,13 +539,14 @@ export const make = Effect.gen(function* () {
       sessionId,
     }).pipe(Effect.asVoid);
 
+  // Fails closed like the upgrade check: an unreadable session ends the connection and the client re-authenticates.
   const isRevoked = (sessionId: AuthSessionId) =>
     authSessions.getById({ sessionId }).pipe(
       Effect.map((row) => Option.isSome(row) && row.value.revokedAt !== null),
       Effect.catch((cause) =>
-        Effect.logWarning("Failed to read session revocation state.").pipe(
+        Effect.logWarning("Failed to read session revocation state; ending the connection.").pipe(
           Effect.annotateLogs({ sessionId, errorTag: cause._tag }),
-          Effect.as(false),
+          Effect.as(true),
         ),
       ),
     );

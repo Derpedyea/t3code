@@ -1,5 +1,5 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { EnvironmentId } from "@t3tools/contracts";
+import { AuthSessionId, EnvironmentId } from "@t3tools/contracts";
 import { expect, it } from "@effect/vitest";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
@@ -557,6 +557,13 @@ it.layer(NodeServices.layer)("SessionStore.layer", (it) => {
       yield* TestClock.adjust("30 seconds");
       yield* Fiber.join(waiter);
     }).pipe(Effect.provide(Layer.merge(makeSessionStoreLayer(), TestClock.layer()))),
+  );
+
+  it.effect("ends the connection when its session can't be read", () =>
+    Effect.gen(function* () {
+      const sessions = yield* SessionStore.SessionStore;
+      yield* sessions.awaitRevocation(AuthSessionId.make("unreadable-session"));
+    }).pipe(Effect.provide(failingSessionLookupCredentialLayer)),
   );
 
   it.effect("persists lastConnectedAt on first connect and updates it after reconnect", () =>
