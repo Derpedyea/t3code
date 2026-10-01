@@ -544,7 +544,7 @@ export const make = Effect.gen(function* () {
       Effect.map((row) => Option.isSome(row) && row.value.revokedAt !== null),
       Effect.catch((cause) =>
         Effect.logWarning("Failed to read session revocation state.").pipe(
-          Effect.annotateLogs({ sessionId, cause }),
+          Effect.annotateLogs({ sessionId, errorTag: cause._tag }),
           Effect.as(false),
         ),
       ),
