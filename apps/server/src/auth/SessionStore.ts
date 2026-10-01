@@ -556,12 +556,11 @@ export const make = Effect.gen(function* () {
         // Subscribe before the first read so a revocation in between is not missed.
         const changes = yield* PubSub.subscribe(changesPubSub);
         yield* Effect.raceFirst(
+          // A session with an open socket only leaves the active list by being revoked.
           Stream.fromSubscription(changes).pipe(
             Stream.filter(
               (change) => change.type === "clientRemoved" && change.sessionId === sessionId,
             ),
-            Stream.mapEffect(() => isRevoked(sessionId)),
-            Stream.filter((revoked) => revoked),
             Stream.runHead,
           ),
           isRevoked(sessionId).pipe(
