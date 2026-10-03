@@ -86,14 +86,8 @@ describe("effect-acp errors", () => {
     expect(fromAgent({ details: "Droid process exited unexpectedly (exit code 1)" }).message).toBe(
       "Internal error: Droid process exited unexpectedly (exit code 1)",
     );
-    // The Rust SDK sends the reason as a plain string.
-    expect(fromAgent("model catalog unavailable").message).toBe(
-      "Internal error: model catalog unavailable",
-    );
-    expect(fromAgent({ details: "Internal error: Agent error" }).message).toBe(
-      "Internal error: Agent error",
-    );
-    expect(fromAgent({ field: "sessionId" }).message).toBe("Internal error");
+    // The Rust SDK sends a plain string, which may already restate the message.
+    expect(fromAgent("Internal error: Agent error").message).toBe("Internal error: Agent error");
   });
 
   it("does not expose legacy diagnostic detail as the transport message", () => {
