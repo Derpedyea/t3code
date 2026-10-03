@@ -10,6 +10,7 @@ import {
 import * as Cause from "effect/Cause";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import { AcpRequestError } from "effect-acp/errors";
 
 import {
   makeProviderFailure,
@@ -99,6 +100,13 @@ it("preserves actionable handoff errors wrapped by turn startup", () => {
     makeProviderFailure({ cause: Cause.fail(cause) }).message,
     new ContextHandoffBudgetError().message,
   );
+});
+
+it("surfaces an ACP agent's own error response", () => {
+  const cause = AcpRequestError.internalError("Internal error", {
+    details: "model quota exhausted",
+  });
+  assert.equal(makeProviderFailure({ cause }).message, "Internal error: model quota exhausted");
 });
 
 it("does not expose defect text nested inside a known error category", () => {
