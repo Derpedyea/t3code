@@ -472,15 +472,6 @@ function cleanupProcessHandles(session: TerminalSessionState): void {
   session.unsubscribeExit = null;
 }
 
-/** Discards queued process output and the state carried between its chunks. */
-function resetProcessOutput(session: TerminalSessionState): void {
-  session.pendingHistoryControlSequence = "";
-  session.unansweredQueries = "";
-  session.pendingProcessEvents = [];
-  session.pendingProcessEventIndex = 0;
-  session.processEventDrainRunning = false;
-}
-
 function enqueueProcessEvent(
   session: TerminalSessionState,
   expectedPid: number,
@@ -2101,7 +2092,11 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
         session.hasRunningSubprocess = false;
         session.childCommandLabel = null;
         session.status = "exited";
-        resetProcessOutput(session);
+        session.pendingHistoryControlSequence = "";
+        session.unansweredQueries = "";
+        session.pendingProcessEvents = [];
+        session.pendingProcessEventIndex = 0;
+        session.processEventDrainRunning = false;
         session.exitCode = Number.isInteger(nextEvent.event.exitCode)
           ? nextEvent.event.exitCode
           : null;
@@ -2170,7 +2165,11 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
       session.hasRunningSubprocess = false;
       session.childCommandLabel = null;
       session.status = "exited";
-      resetProcessOutput(session);
+      session.pendingHistoryControlSequence = "";
+      session.unansweredQueries = "";
+      session.pendingProcessEvents = [];
+      session.pendingProcessEventIndex = 0;
+      session.processEventDrainRunning = false;
       session.updatedAt = updatedAt;
       return [undefined, state] as const;
     });
@@ -2692,13 +2691,21 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
       liveSession.worktreePath = nextWorktreePath;
       liveSession.runtimeEnv = nextRuntimeEnv;
       liveSession.history.clear();
-      resetProcessOutput(liveSession);
+      liveSession.pendingHistoryControlSequence = "";
+      liveSession.unansweredQueries = "";
+      liveSession.pendingProcessEvents = [];
+      liveSession.pendingProcessEventIndex = 0;
+      liveSession.processEventDrainRunning = false;
       yield* persistHistory(liveSession.threadId, liveSession.terminalId, liveSession.history);
     } else if (liveSession.status === "exited" || liveSession.status === "error") {
       liveSession.runtimeEnv = nextRuntimeEnv;
       liveSession.worktreePath = nextWorktreePath;
       liveSession.history.clear();
-      resetProcessOutput(liveSession);
+      liveSession.pendingHistoryControlSequence = "";
+      liveSession.unansweredQueries = "";
+      liveSession.pendingProcessEvents = [];
+      liveSession.pendingProcessEventIndex = 0;
+      liveSession.processEventDrainRunning = false;
       yield* persistHistory(liveSession.threadId, liveSession.terminalId, liveSession.history);
     }
 
@@ -2739,61 +2746,62 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
     withThreadLock(
       input.threadId,
       resolveLaunchInputEnvironment(input).pipe(
-        Effect.flatMap((resolvedInput) => openLocked(resolvedInput)),
+        Effect.flatMap(openLocked),
         Effect.map((session) => snapshot(session)),
       ),
     );
 
-  const openOrAttachForStream = Effect.fn("terminal.openOrAttachForStream")(
-    function* (input: TerminalAttachInput) {
-      const terminalId = input.terminalId;
-      const existing = yield* getSession(input.threadId, terminalId);
+  const openOrAttachForStream = (input: TerminalAttachInput) =>
+    withThreadLock(
+      input.threadId,
+      Effect.gen(function* () {
+        const terminalId = input.terminalId;
+        const existing = yield* getSession(input.threadId, terminalId);
 
-      if (Option.isNone(existing)) {
-        if (!input.cwd) {
-          return yield* new TerminalSessionLookupError({
-            threadId: input.threadId,
+        if (Option.isNone(existing)) {
+          if (!input.cwd) {
+            return yield* new TerminalSessionLookupError({
+              threadId: input.threadId,
+              terminalId,
+            });
+          }
+
+          const resolvedInput = yield* resolveLaunchInputEnvironment({
+            ...input,
             terminalId,
+            cwd: input.cwd,
           });
+          return attachState(yield* openLocked(resolvedInput));
         }
 
-        const resolvedInput = yield* resolveLaunchInputEnvironment({
-          ...input,
-          terminalId,
-          cwd: input.cwd,
-        });
-        return attachState(yield* openLocked(resolvedInput));
-      }
+        const session = existing.value;
+        const targetCols = input.cols ?? session.cols;
+        const targetRows = input.rows ?? session.rows;
 
-      const session = existing.value;
-      const targetCols = input.cols ?? session.cols;
-      const targetRows = input.rows ?? session.rows;
+        if (!session.process && input.cwd && input.restartIfNotRunning === true) {
+          const resolvedInput = yield* resolveLaunchInputEnvironment({
+            ...input,
+            terminalId,
+            cwd: input.cwd,
+          });
+          return attachState(yield* openLocked(resolvedInput));
+        }
 
-      if (!session.process && input.cwd && input.restartIfNotRunning === true) {
-        const resolvedInput = yield* resolveLaunchInputEnvironment({
-          ...input,
-          terminalId,
-          cwd: input.cwd,
-        });
-        return attachState(yield* openLocked(resolvedInput));
-      }
+        if (
+          session.process &&
+          session.status === "running" &&
+          (session.cols !== targetCols || session.rows !== targetRows)
+        ) {
+          const process = session.process;
+          yield* resizePtyProcess(session, process, targetCols, targetRows);
+          session.cols = targetCols;
+          session.rows = targetRows;
+          session.updatedAt = yield* nowIso;
+        }
 
-      if (
-        session.process &&
-        session.status === "running" &&
-        (session.cols !== targetCols || session.rows !== targetRows)
-      ) {
-        const process = session.process;
-        yield* resizePtyProcess(session, process, targetCols, targetRows);
-        session.cols = targetCols;
-        session.rows = targetRows;
-        session.updatedAt = yield* nowIso;
-      }
-
-      return attachState(session);
-    },
-    (effect, input) => withThreadLock(input.threadId, effect),
-  );
+        return attachState(session);
+      }),
+    );
 
   const readAllTerminalMetadata = () =>
     readManagerState.pipe(
@@ -3047,7 +3055,11 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
         const terminalId = input.terminalId;
         const session = yield* requireSession(input.threadId, terminalId);
         session.history.clear();
-        resetProcessOutput(session);
+        session.pendingHistoryControlSequence = "";
+        session.unansweredQueries = "";
+        session.pendingProcessEvents = [];
+        session.pendingProcessEventIndex = 0;
+        session.processEventDrainRunning = false;
         const eventStamp = advanceEventSequence(session);
         yield* persistHistory(input.threadId, terminalId, session.history);
         yield* publishEvent({
@@ -3117,7 +3129,11 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
       const rows = input.rows ?? session.rows;
 
       session.history.clear();
-      resetProcessOutput(session);
+      session.pendingHistoryControlSequence = "";
+      session.unansweredQueries = "";
+      session.pendingProcessEvents = [];
+      session.pendingProcessEventIndex = 0;
+      session.processEventDrainRunning = false;
       yield* persistHistory(input.threadId, terminalId, session.history);
       yield* startSession(
         session,
