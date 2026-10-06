@@ -538,6 +538,50 @@ it.layer(
     }),
   );
 
+  it.effect("drops live output that its attach snapshot already covers", () =>
+    Effect.gen(function* () {
+      const { manager, ptyAdapter } = yield* createManager();
+      yield* manager.open(openInput());
+      const shell = ptyAdapter.processes[0];
+      expect(shell).toBeDefined();
+      if (!shell) return;
+      // Hold the output's publish after the drain has committed it to the session.
+      const held = yield* Deferred.make<void>();
+      const release = yield* Deferred.make<void>();
+      const stopHolding = yield* manager.subscribe((event) =>
+        event.type === "output"
+          ? Deferred.succeed(held, undefined).pipe(Effect.andThen(Deferred.await(release)))
+          : Effect.void,
+      );
+      yield* Effect.addFinalizer(() => Effect.sync(stopHolding));
+      shell.emitData("prompt \u001b[0c");
+      yield* Deferred.await(held);
+
+      const events: TerminalAttachStreamEvent[] = [];
+      const detach = yield* manager.attachStream(openInput(), (event) =>
+        Effect.sync(() => events.push(event)),
+      );
+      yield* Effect.addFinalizer(() => Effect.sync(detach));
+      const published = yield* Deferred.make<void>();
+      const stopWatching = yield* manager.subscribe((event) =>
+        event.type === "output"
+          ? Deferred.succeed(published, undefined).pipe(Effect.asVoid)
+          : Effect.void,
+      );
+      yield* Effect.addFinalizer(() => Effect.sync(stopWatching));
+      yield* Deferred.succeed(release, undefined);
+      yield* Deferred.await(published);
+
+      expect(
+        events.map((event) =>
+          event.type === "snapshot"
+            ? event.snapshot.history
+            : event.type === "output" && event.data,
+        ),
+      ).toEqual(["prompt ", "\u001b[0c"]);
+    }),
+  );
+
   it.effect("attaches to exited sessions without restarting them", () =>
     Effect.gen(function* () {
       const { manager, ptyAdapter, getEvents } = yield* createManager();

@@ -2827,6 +2827,10 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
     return Effect.gen(function* () {
       const bufferedEvents: TerminalEvent[] = [];
       let deliverLive = false;
+      // Output committed before the snapshot can still be mid-publish when this
+      // stream goes live. Drop it until an event passes the snapshot; sequences
+      // only restart for a new session, which begins with a lifecycle event.
+      let coveredBy: TerminalSessionSnapshot | null = null;
 
       unsubscribe = yield* subscribe((event) => {
         if (event.threadId !== input.threadId || event.terminalId !== input.terminalId) {
@@ -2836,6 +2840,13 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
         if (!deliverLive) {
           bufferedEvents.push(event);
           return Effect.void;
+        }
+
+        if (coveredBy !== null) {
+          if (event.type === "output" && isDuplicateAttachSnapshotEvent(event, coveredBy)) {
+            return Effect.void;
+          }
+          coveredBy = null;
         }
 
         const attachEvent = terminalEventToAttachEvent(event);
@@ -2871,6 +2882,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
         }
       }
 
+      coveredBy = initialSnapshot;
       deliverLive = true;
       return () => {
         unsubscribe?.();
