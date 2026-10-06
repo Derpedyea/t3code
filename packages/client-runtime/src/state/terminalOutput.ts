@@ -10,6 +10,8 @@ export interface TerminalOutputState {
   readonly chunks: ReadonlyArray<TerminalOutputChunk>;
   readonly retainedBytes: number;
   readonly resetVersion: number;
+  /** Where output streamed after the last reset begins; earlier text replays a snapshot. */
+  readonly liveOffset: number;
   readonly nextOffset: number;
 }
 
@@ -33,7 +35,10 @@ export type TerminalOutputUpdate =
     }
   | {
       readonly type: "reset";
+      /** Replayed output whose terminal queries were already answered or stripped. */
       readonly data: string;
+      /** Output no renderer has parsed, written after `data`; its queries still need answers. */
+      readonly live: string;
       readonly cursor: TerminalOutputCursor;
     }
   | {
@@ -54,6 +59,7 @@ export const EMPTY_TERMINAL_OUTPUT_STATE = Object.freeze<TerminalOutputState>({
   chunks: Object.freeze([]),
   retainedBytes: 0,
   resetVersion: 0,
+  liveOffset: 0,
   nextOffset: 0,
 });
 
@@ -210,6 +216,7 @@ function appendOutput(
       chunks: [],
       retainedBytes: 0,
       resetVersion: current.resetVersion + 1,
+      liveOffset: current.nextOffset + data.length,
       nextOffset: current.nextOffset + data.length,
     };
   }
@@ -256,6 +263,7 @@ function appendOutput(
     chunks: retainedChunks,
     retainedBytes,
     resetVersion: current.resetVersion,
+    liveOffset: current.liveOffset,
     nextOffset: appended.nextOffset,
   };
 }
@@ -276,6 +284,7 @@ function resetOutput(
     chunks: reset.chunks,
     retainedBytes: reset.byteLength,
     resetVersion: current.resetVersion + 1,
+    liveOffset: reset.nextOffset,
     nextOffset: reset.nextOffset,
   };
 }
@@ -284,22 +293,39 @@ export function terminalOutputText(output: TerminalOutputState): string {
   return output.chunks.map((chunk) => chunk.data).join("");
 }
 
+/**
+ * Read what a renderer at `cursor` still has to draw. `parsed` is how far any
+ * renderer of this output has parsed it, so a remounted renderer replays that
+ * part without answering its terminal queries twice.
+ */
 export function readTerminalOutputUpdate(
   output: TerminalOutputState,
   cursor: TerminalOutputCursor,
+  parsed: TerminalOutputCursor = cursor,
 ): TerminalOutputUpdate {
   const nextCursor = {
     generation: output.generation,
     resetVersion: output.resetVersion,
     offset: output.nextOffset,
   };
-  const firstChunk = output.chunks[0];
+  const firstOffset = output.chunks[0]?.startOffset ?? output.nextOffset;
   if (
     cursor.generation !== output.generation ||
     cursor.resetVersion !== output.resetVersion ||
-    cursor.offset < (firstChunk?.startOffset ?? output.nextOffset)
+    cursor.offset < firstOffset
   ) {
-    return { type: "reset", data: terminalOutputText(output), cursor: nextCursor };
+    const text = terminalOutputText(output);
+    const parsedOffset =
+      parsed.generation === output.generation && parsed.resetVersion === output.resetVersion
+        ? parsed.offset
+        : 0;
+    const split = Math.max(0, Math.max(output.liveOffset, parsedOffset) - firstOffset);
+    return {
+      type: "reset",
+      data: text.slice(0, split),
+      live: text.slice(split),
+      cursor: nextCursor,
+    };
   }
 
   const appended = output.chunks.filter(

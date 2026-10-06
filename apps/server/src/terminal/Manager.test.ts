@@ -26,6 +26,7 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as PlatformError from "effect/PlatformError";
 import * as Path from "effect/Path";
+import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
 import * as Schedule from "effect/Schedule";
 import * as Schema from "effect/Schema";
@@ -485,6 +486,55 @@ it.layer(
         events.filter((event) => event.type === "snapshot").map((event) => event.snapshot.status),
       ).toEqual(["running", "running"]);
       expect(ptyAdapter.spawnInputs).toHaveLength(2);
+    }),
+  );
+
+  it.effect("forwards unanswered terminal queries to clients that attach later", () =>
+    Effect.gen(function* () {
+      const { manager, ptyAdapter } = yield* createManager();
+      yield* manager.open(openInput());
+      const shell = ptyAdapter.processes[0];
+      expect(shell).toBeDefined();
+      if (!shell) return;
+      const printed = yield* Queue.unbounded<void>();
+      const unsubscribe = yield* manager.subscribe((event) =>
+        event.type === "output" ? Queue.offer(printed, undefined).pipe(Effect.asVoid) : Effect.void,
+      );
+      yield* Effect.addFinalizer(() => Effect.sync(unsubscribe));
+      const print = (data: string) =>
+        Effect.suspend(() => {
+          shell.emitData(data);
+          return Queue.take(printed);
+        });
+      const attach = Effect.gen(function* () {
+        const events: TerminalAttachStreamEvent[] = [];
+        const detach = yield* manager.attachStream(openInput(), (event) =>
+          Effect.sync(() => events.push(event)),
+        );
+        detach();
+        return events.map((event) =>
+          event.type === "snapshot"
+            ? event.snapshot.history
+            : event.type === "output" && event.data,
+        );
+      });
+
+      // fish prints its startup queries before any client attaches, then blocks on DA1.
+      yield* print("prompt \u001b[0c");
+      expect(yield* attach).toEqual(["prompt ", "\u001b[0c"]);
+
+      // A client's reply is input, after which attaching replays history alone.
+      yield* manager.write({
+        threadId: "thread-1",
+        terminalId: DEFAULT_TERMINAL_ID,
+        data: "\u001b[?62;22c",
+      });
+      expect(yield* attach).toEqual(["prompt "]);
+
+      // A restarted shell never sent the old shell's queries.
+      yield* print("\u001b[0c");
+      yield* manager.restart(restartInput());
+      expect(yield* attach).toEqual([""]);
     }),
   );
 

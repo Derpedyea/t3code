@@ -108,12 +108,17 @@ function writeSystemMessage(terminal: GhosttyTerminalSurface, message: string): 
   terminal.write(`\r\n[terminal] ${message}\r\n`);
 }
 
+// How far each terminal's renderers have parsed its attached output. It outlives
+// a renderer so a remount replays that part silently, answering only newer queries.
+const parsedTerminalOutput = new Map<string, TerminalOutputCursor>();
+
 export function writeTerminalOutputUpdate(
   terminal: Pick<GhosttyTerminalSurface, "resetAndWrite" | "write">,
   update: TerminalOutputUpdate,
 ): void {
   if (update.type === "reset") {
     terminal.resetAndWrite(update.data);
+    if (update.live.length > 0) terminal.write(update.live);
   } else if (update.type === "append") {
     terminal.write(update.data);
   }
@@ -355,6 +360,7 @@ export function TerminalViewport({
   const terminalRef = useRef<GhosttyTerminalSurface | null>(null);
   const visibleRef = useRef(visible);
   const environmentId = threadRef.environmentId;
+  const outputKey = JSON.stringify([environmentId, threadId, terminalId]);
   const serverConfig = useAtomValue(serverEnvironment.configValueAtom(environmentId));
   const openInPreferredEditor = useOpenInPreferredEditor(
     environmentId,
@@ -531,11 +537,16 @@ export function TerminalViewport({
       const initialOutput = readTerminalOutputUpdate(
         latestSession.output,
         INITIAL_TERMINAL_OUTPUT_CURSOR,
+        parsedTerminalOutput.get(outputKey),
       );
-      if (initialOutput.type === "reset" && initialOutput.data.length > 0) {
+      if (
+        initialOutput.type === "reset" &&
+        initialOutput.data.length + initialOutput.live.length > 0
+      ) {
         writeTerminalOutputUpdate(terminal, initialOutput);
       }
       outputCursorRef.current = initialOutput.cursor;
+      parsedTerminalOutput.set(outputKey, initialOutput.cursor);
       if (latestSession.error !== null) writeSystemMessage(terminal, latestSession.error);
       // Attaching to a session that already exited must still run exit handling
       // once, so mount synchronization starts from the empty "closed" state.
@@ -920,7 +931,7 @@ export function TerminalViewport({
       teardown?.();
       if (hadFocus && mount.isConnected) mount.focus({ preventScroll: true });
     };
-  }, [cwd, environmentId, runtimeEnvKey, terminalId, threadId, worktreePath]);
+  }, [cwd, environmentId, outputKey, runtimeEnvKey, terminalId, threadId, worktreePath]);
 
   useEffect(() => {
     const terminal = terminalRef.current;
@@ -944,6 +955,7 @@ export function TerminalViewport({
     const outputUpdate = readTerminalOutputUpdate(current.output, outputCursorRef.current);
     writeTerminalOutputUpdate(terminal, outputUpdate);
     outputCursorRef.current = outputUpdate.cursor;
+    parsedTerminalOutput.set(outputKey, outputUpdate.cursor);
     terminal.clearSelection();
 
     if (current.error !== null && current.error !== previous.error) {
@@ -951,7 +963,7 @@ export function TerminalViewport({
     }
 
     previousSessionRef.current = current;
-  }, [terminalOutput, terminalError, terminalStatus, terminalVersion]);
+  }, [outputKey, terminalOutput, terminalError, terminalStatus, terminalVersion]);
 
   useEffect(() => {
     if (!autoFocus || !visible) return;

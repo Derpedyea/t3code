@@ -95,6 +95,7 @@ export {
 
 const DEFAULT_HISTORY_LINE_LIMIT = 5_000;
 const DEFAULT_HISTORY_BYTE_LIMIT = 8 * 1024 * 1024;
+const MAX_UNANSWERED_QUERIES_LENGTH = 4096;
 const MAX_HISTORY_CHUNK_LENGTH = 16 * 1024;
 const DEFAULT_PERSIST_DEBOUNCE_MS = 40;
 const DEFAULT_SUBPROCESS_POLL_INTERVAL_MS = 1_000;
@@ -282,6 +283,8 @@ interface TerminalSessionState {
   pid: number | null;
   history: BoundedTerminalHistory;
   pendingHistoryControlSequence: string;
+  /** Query traffic stripped from history since the last input; no client has answered it. */
+  unansweredQueries: string;
   pendingProcessEvents: Array<PendingProcessEvent>;
   pendingProcessEventIndex: number;
   processEventDrainRunning: boolean;
@@ -1107,16 +1110,21 @@ function findEscapeSequenceEndIndex(input: string, start: number): number | null
   return isEscapeFinalByte(input.charCodeAt(cursor)) ? cursor + 1 : start + 1;
 }
 
+/** Splits output into replayable history and the query traffic stripped from it. */
 function sanitizeTerminalHistoryChunk(
   pendingControlSequence: string,
   data: string,
-): { visibleText: string; pendingControlSequence: string } {
+): { visibleText: string; strippedText: string; pendingControlSequence: string } {
   const input = `${pendingControlSequence}${data}`;
   let visibleText = "";
+  let strippedText = "";
   let index = 0;
 
   const append = (value: string) => {
     visibleText += value;
+  };
+  const strip = (value: string) => {
+    strippedText += value;
   };
 
   while (index < input.length) {
@@ -1125,7 +1133,7 @@ function sanitizeTerminalHistoryChunk(
     if (codePoint === 0x1b) {
       const nextCodePoint = input.charCodeAt(index + 1);
       if (Number.isNaN(nextCodePoint)) {
-        return { visibleText, pendingControlSequence: input.slice(index) };
+        return { visibleText, strippedText, pendingControlSequence: input.slice(index) };
       }
 
       if (nextCodePoint === 0x5b) {
@@ -1134,7 +1142,9 @@ function sanitizeTerminalHistoryChunk(
           if (isCsiFinalByte(input.charCodeAt(cursor))) {
             const sequence = input.slice(index, cursor + 1);
             const body = input.slice(index + 2, cursor);
-            if (!shouldStripCsiSequence(body, input[cursor] ?? "")) {
+            if (shouldStripCsiSequence(body, input[cursor] ?? "")) {
+              strip(sequence);
+            } else {
               append(sequence);
             }
             index = cursor + 1;
@@ -1143,7 +1153,7 @@ function sanitizeTerminalHistoryChunk(
           cursor += 1;
         }
         if (cursor >= input.length) {
-          return { visibleText, pendingControlSequence: input.slice(index) };
+          return { visibleText, strippedText, pendingControlSequence: input.slice(index) };
         }
         continue;
       }
@@ -1156,14 +1166,16 @@ function sanitizeTerminalHistoryChunk(
       ) {
         const terminatorIndex = findStringTerminatorIndex(input, index + 2);
         if (terminatorIndex === null) {
-          return { visibleText, pendingControlSequence: input.slice(index) };
+          return { visibleText, strippedText, pendingControlSequence: input.slice(index) };
         }
         const sequence = input.slice(index, terminatorIndex);
         const content = stripStringTerminator(input.slice(index + 2, terminatorIndex));
-        const strip =
+        if (
           (nextCodePoint === 0x5d && shouldStripOscSequence(content)) ||
-          (nextCodePoint === 0x50 && shouldStripDcsSequence(content));
-        if (!strip) {
+          (nextCodePoint === 0x50 && shouldStripDcsSequence(content))
+        ) {
+          strip(sequence);
+        } else {
           append(sequence);
         }
         index = terminatorIndex;
@@ -1172,7 +1184,7 @@ function sanitizeTerminalHistoryChunk(
 
       const escapeSequenceEndIndex = findEscapeSequenceEndIndex(input, index + 1);
       if (escapeSequenceEndIndex === null) {
-        return { visibleText, pendingControlSequence: input.slice(index) };
+        return { visibleText, strippedText, pendingControlSequence: input.slice(index) };
       }
       append(input.slice(index, escapeSequenceEndIndex));
       index = escapeSequenceEndIndex;
@@ -1185,7 +1197,9 @@ function sanitizeTerminalHistoryChunk(
         if (isCsiFinalByte(input.charCodeAt(cursor))) {
           const sequence = input.slice(index, cursor + 1);
           const body = input.slice(index + 1, cursor);
-          if (!shouldStripCsiSequence(body, input[cursor] ?? "")) {
+          if (shouldStripCsiSequence(body, input[cursor] ?? "")) {
+            strip(sequence);
+          } else {
             append(sequence);
           }
           index = cursor + 1;
@@ -1194,7 +1208,7 @@ function sanitizeTerminalHistoryChunk(
         cursor += 1;
       }
       if (cursor >= input.length) {
-        return { visibleText, pendingControlSequence: input.slice(index) };
+        return { visibleText, strippedText, pendingControlSequence: input.slice(index) };
       }
       continue;
     }
@@ -1202,14 +1216,16 @@ function sanitizeTerminalHistoryChunk(
     if (codePoint === 0x9d || codePoint === 0x90 || codePoint === 0x9e || codePoint === 0x9f) {
       const terminatorIndex = findStringTerminatorIndex(input, index + 1);
       if (terminatorIndex === null) {
-        return { visibleText, pendingControlSequence: input.slice(index) };
+        return { visibleText, strippedText, pendingControlSequence: input.slice(index) };
       }
       const sequence = input.slice(index, terminatorIndex);
       const content = stripStringTerminator(input.slice(index + 1, terminatorIndex));
-      const strip =
+      if (
         (codePoint === 0x9d && shouldStripOscSequence(content)) ||
-        (codePoint === 0x90 && shouldStripDcsSequence(content));
-      if (!strip) {
+        (codePoint === 0x90 && shouldStripDcsSequence(content))
+      ) {
+        strip(sequence);
+      } else {
         append(sequence);
       }
       index = terminatorIndex;
@@ -1220,7 +1236,16 @@ function sanitizeTerminalHistoryChunk(
     index += 1;
   }
 
-  return { visibleText, pendingControlSequence: "" };
+  return { visibleText, strippedText, pendingControlSequence: "" };
+}
+
+/** Keeps the latest whole query sequences; a shell only waits on its most recent ones. */
+function appendUnansweredQueries(current: string, queries: string): string {
+  if (queries.length === 0) return current;
+  if (current.length + queries.length <= MAX_UNANSWERED_QUERIES_LENGTH) {
+    return `${current}${queries}`;
+  }
+  return queries.length <= MAX_UNANSWERED_QUERIES_LENGTH ? queries : "";
 }
 
 function legacySafeThreadId(threadId: string): string {
@@ -2032,6 +2057,10 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
             nextEvent.data,
           );
           session.pendingHistoryControlSequence = sanitized.pendingControlSequence;
+          session.unansweredQueries = appendUnansweredQueries(
+            session.unansweredQueries,
+            sanitized.strippedText,
+          );
           if (sanitized.visibleText.length > 0) {
             session.history.append(sanitized.visibleText);
           }
@@ -2055,6 +2084,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
         session.childCommandLabel = null;
         session.status = "exited";
         session.pendingHistoryControlSequence = "";
+        session.unansweredQueries = "";
         session.pendingProcessEvents = [];
         session.pendingProcessEventIndex = 0;
         session.processEventDrainRunning = false;
@@ -2127,6 +2157,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
       session.childCommandLabel = null;
       session.status = "exited";
       session.pendingHistoryControlSequence = "";
+      session.unansweredQueries = "";
       session.pendingProcessEvents = [];
       session.pendingProcessEventIndex = 0;
       session.processEventDrainRunning = false;
@@ -2589,6 +2620,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
         pid: null,
         history,
         pendingHistoryControlSequence: "",
+        unansweredQueries: "",
         pendingProcessEvents: [],
         pendingProcessEventIndex: 0,
         processEventDrainRunning: false,
@@ -2651,6 +2683,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
       liveSession.runtimeEnv = nextRuntimeEnv;
       liveSession.history.clear();
       liveSession.pendingHistoryControlSequence = "";
+      liveSession.unansweredQueries = "";
       liveSession.pendingProcessEvents = [];
       liveSession.pendingProcessEventIndex = 0;
       liveSession.processEventDrainRunning = false;
@@ -2660,6 +2693,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
       liveSession.worktreePath = nextWorktreePath;
       liveSession.history.clear();
       liveSession.pendingHistoryControlSequence = "";
+      liveSession.unansweredQueries = "";
       liveSession.pendingProcessEvents = [];
       liveSession.pendingProcessEventIndex = 0;
       liveSession.processEventDrainRunning = false;
@@ -2725,7 +2759,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
             terminalId,
             cwd: input.cwd,
           });
-          return yield* openLocked(resolvedInput);
+          return { snapshot: yield* openLocked(resolvedInput), unansweredQueries: "" };
         }
 
         const session = existing.value;
@@ -2738,7 +2772,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
             terminalId,
             cwd: input.cwd,
           });
-          return yield* openLocked(resolvedInput);
+          return { snapshot: yield* openLocked(resolvedInput), unansweredQueries: "" };
         }
 
         if (
@@ -2753,7 +2787,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
           session.updatedAt = yield* nowIso;
         }
 
-        return snapshot(session);
+        return { snapshot: snapshot(session), unansweredQueries: session.unansweredQueries };
       }),
     );
 
@@ -2808,12 +2842,23 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
         return attachEvent ? listener(attachEvent) : Effect.void;
       });
 
-      const initialSnapshot = yield* openOrAttachForStream(input);
+      const { snapshot: initialSnapshot, unansweredQueries } = yield* openOrAttachForStream(input);
 
       yield* listener({
         type: "snapshot",
         snapshot: initialSnapshot,
       });
+
+      // History drops query traffic, but the shell may still be waiting on it:
+      // fish blocks on DA1 when it starts before any client attaches.
+      if (unansweredQueries.length > 0) {
+        yield* listener({
+          type: "output",
+          threadId: input.threadId,
+          terminalId: input.terminalId,
+          data: unansweredQueries,
+        });
+      }
 
       for (const event of bufferedEvents) {
         if (isDuplicateAttachSnapshotEvent(event, initialSnapshot)) {
@@ -2938,6 +2983,8 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
       });
     }
     session.inputCount += 1;
+    // A client answers queries as soon as it parses them, so input means none are pending.
+    session.unansweredQueries = "";
     yield* Effect.try({
       try: () => process.write(input.data),
       catch: (cause) =>
@@ -2977,6 +3024,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
         const session = yield* requireSession(input.threadId, terminalId);
         session.history.clear();
         session.pendingHistoryControlSequence = "";
+        session.unansweredQueries = "";
         session.pendingProcessEvents = [];
         session.pendingProcessEventIndex = 0;
         session.processEventDrainRunning = false;
@@ -3012,6 +3060,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
           pid: null,
           history: new BoundedTerminalHistory(historyLineLimit, "", historyByteLimit),
           pendingHistoryControlSequence: "",
+          unansweredQueries: "",
           pendingProcessEvents: [],
           pendingProcessEventIndex: 0,
           processEventDrainRunning: false,
@@ -3049,6 +3098,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
 
       session.history.clear();
       session.pendingHistoryControlSequence = "";
+      session.unansweredQueries = "";
       session.pendingProcessEvents = [];
       session.pendingProcessEventIndex = 0;
       session.processEventDrainRunning = false;

@@ -331,7 +331,8 @@ describe("terminal session reducers", () => {
     });
     expect(readTerminalOutputUpdate(state.output, staleCursor)).toMatchObject({
       type: "reset",
-      data: "lo world",
+      data: "",
+      live: "lo world",
     });
     expect(state.output.retainedBytes).toBe(8);
   });

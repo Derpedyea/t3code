@@ -285,6 +285,29 @@ describe("GhosttyTerminalCore snapshots", () => {
     expect({ type: update.type, replies }).toEqual({ type: "append", replies: ["\x1b[0n"] });
   });
 
+  it("answers queries that streamed in before a renderer mounted, once across remounts", async () => {
+    const replies: string[] = [];
+    // A shell's startup query lands after the snapshot but before the WASM loads.
+    let state = createSession("prompt ");
+    state = append(state, "\x1b[5n");
+    const first = await createCore((data) => replies.push(data));
+    const mounted = readTerminalOutputUpdate(state.output, INITIAL_TERMINAL_OUTPUT_CURSOR);
+    writeTerminalOutputUpdate(first, mounted);
+    expect(replies).toEqual(["\x1b[0n"]);
+
+    // A remount replays that query silently and answers only what came after.
+    first.dispose();
+    state = append(state, "\x1b[5n");
+    const second = await createCore((data) => replies.push(data));
+    const remounted = readTerminalOutputUpdate(
+      state.output,
+      INITIAL_TERMINAL_OUTPUT_CURSOR,
+      mounted.cursor,
+    );
+    writeTerminalOutputUpdate(second, remounted);
+    expect(replies).toEqual(["\x1b[0n", "\x1b[0n"]);
+  });
+
   it("recovers a lagging renderer once from bounded output and resumes appending", async () => {
     const [core, reference] = await Promise.all([createCore(), createCore()]);
     let state = createSession("\x1b[31mold");
@@ -296,11 +319,10 @@ describe("GhosttyTerminalCore snapshots", () => {
 
     const recovery = readTerminalOutputUpdate(state.output, initial.cursor);
     if (recovery.type !== "reset") throw new Error(`Expected reset, received ${recovery.type}`);
-    expect(new TextEncoder().encode(recovery.data).byteLength).toBe(
-      DEFAULT_MAX_TERMINAL_BUFFER_BYTES,
-    );
+    const retained = `${recovery.data}${recovery.live}`;
+    expect(new TextEncoder().encode(retained).byteLength).toBe(DEFAULT_MAX_TERMINAL_BUFFER_BYTES);
     writeTerminalOutputUpdate(core, recovery);
-    reference.resetAndWrite(recovery.data);
+    reference.resetAndWrite(retained);
     expect(core.snapshot()).toEqual(reference.snapshot());
 
     state = append(state, "\r\nlatest");
