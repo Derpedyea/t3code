@@ -42,3 +42,11 @@ device queries can otherwise provoke fresh replies that appear as junk at the
 prompt. The server strips query/response traffic from retained history, and the
 [web renderer](../../apps/web/src/terminal/ghostty/core.ts) detaches its PTY writer
 during replay. Preserve both protections when changing retention or renderer code.
+
+Queries no client has answered yet are the exception. A shell can print startup
+queries before any renderer attaches and then block on the reply (fish waits 10 s
+for DA1). The [server](../../apps/server/src/terminal/Manager.ts) keeps the query
+traffic stripped since the last input and sends it right after an attach snapshot.
+On a reset, the [client output buffer](../../packages/client-runtime/src/state/terminalOutput.ts)
+replays the snapshot muted and answers only output no renderer has parsed. Input
+clears the stored queries, because a renderer replies as soon as it parses a query.

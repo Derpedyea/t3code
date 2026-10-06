@@ -199,6 +199,17 @@ function restartInput(overrides: Partial<TerminalRestartInput> = {}): TerminalRe
   };
 }
 
+/** What an attach stream showed: snapshot history, output data, or else the event type. */
+function attachTranscript(events: ReadonlyArray<TerminalAttachStreamEvent>) {
+  return events.map((event) =>
+    event.type === "snapshot"
+      ? event.snapshot.history
+      : event.type === "output"
+        ? event.data
+        : event.type,
+  );
+}
+
 const historyLogPath = (logsDir: string, threadId = "thread-1") =>
   Effect.service(Path.Path).pipe(
     Effect.map(({ join }) => join(logsDir, `terminal_${Base64Url.encode(threadId)}.log`)),
@@ -502,33 +513,33 @@ it.layer(
       );
       yield* Effect.addFinalizer(() => Effect.sync(unsubscribe));
       const print = (data: string) =>
-        Effect.suspend(() => {
-          shell.emitData(data);
-          return Queue.take(printed);
-        });
+        Effect.sync(() => shell.emitData(data)).pipe(Effect.andThen(Queue.take(printed)));
       const attach = Effect.gen(function* () {
         const events: TerminalAttachStreamEvent[] = [];
         const detach = yield* manager.attachStream(openInput(), (event) =>
           Effect.sync(() => events.push(event)),
         );
         detach();
-        return events.map((event) =>
-          event.type === "snapshot"
-            ? event.snapshot.history
-            : event.type === "output" && event.data,
-        );
+        return attachTranscript(events);
       });
+      const reply = {
+        threadId: "thread-1",
+        terminalId: DEFAULT_TERMINAL_ID,
+        data: "\u001b[?62;22c",
+      };
 
       // fish prints its startup queries before any client attaches, then blocks on DA1.
       yield* print("prompt \u001b[0c");
       expect(yield* attach).toEqual(["prompt ", "\u001b[0c"]);
 
+      // A reply that never reached the shell leaves its queries pending.
+      shell.writeFailure = new Error("PTY input handle is unavailable");
+      yield* Effect.flip(manager.write(reply));
+      shell.writeFailure = undefined;
+      expect(yield* attach).toEqual(["prompt ", "\u001b[0c"]);
+
       // A client's reply is input, after which attaching replays history alone.
-      yield* manager.write({
-        threadId: "thread-1",
-        terminalId: DEFAULT_TERMINAL_ID,
-        data: "\u001b[?62;22c",
-      });
+      yield* manager.write(reply);
       expect(yield* attach).toEqual(["prompt "]);
 
       // A restarted shell never sent the old shell's queries.
@@ -562,6 +573,8 @@ it.layer(
         Effect.sync(() => events.push(event)),
       );
       yield* Effect.addFinalizer(() => Effect.sync(detach));
+      // A newer event reaching the stream first does not make the held output new.
+      yield* manager.clear({ threadId: "thread-1", terminalId: DEFAULT_TERMINAL_ID });
       const published = yield* Deferred.make<void>();
       const stopWatching = yield* manager.subscribe((event) =>
         event.type === "output"
@@ -569,16 +582,33 @@ it.layer(
           : Effect.void,
       );
       yield* Effect.addFinalizer(() => Effect.sync(stopWatching));
+      // The held publish is still looping over listeners, so it reaches this
+      // stream, which subscribed meanwhile, after the stream has gone live.
       yield* Deferred.succeed(release, undefined);
       yield* Deferred.await(published);
 
-      expect(
-        events.map((event) =>
-          event.type === "snapshot"
-            ? event.snapshot.history
-            : event.type === "output" && event.data,
-        ),
-      ).toEqual(["prompt ", "\u001b[0c"]);
+      expect(attachTranscript(events)).toEqual(["prompt ", "\u001b[0c", "cleared"]);
+    }),
+  );
+
+  it.effect("forwards queries a shell prints while the attach that starts it opens", () =>
+    Effect.gen(function* () {
+      const { manager, ptyAdapter } = yield* createManager();
+      // The shell's first output lands while its startup event is still publishing.
+      const unsubscribe = yield* manager.subscribe((event) =>
+        event.type === "started"
+          ? Effect.sync(() => ptyAdapter.processes[0]?.emitData("prompt \u001b[0c"))
+          : Effect.void,
+      );
+      yield* Effect.addFinalizer(() => Effect.sync(unsubscribe));
+
+      const events: TerminalAttachStreamEvent[] = [];
+      const detach = yield* manager.attachStream(openInput(), (event) =>
+        Effect.sync(() => events.push(event)),
+      );
+      yield* Effect.addFinalizer(() => Effect.sync(detach));
+
+      expect(attachTranscript(events)).toEqual(["prompt ", "\u001b[0c"]);
     }),
   );
 

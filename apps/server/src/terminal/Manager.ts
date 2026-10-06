@@ -389,6 +389,11 @@ function snapshot(session: TerminalSessionState): TerminalSessionSnapshot {
   };
 }
 
+/** What an attach replays: the snapshot, then queries its shell may still be waiting on. */
+function attachState(session: TerminalSessionState) {
+  return { snapshot: snapshot(session), unansweredQueries: session.unansweredQueries };
+}
+
 function summary(session: TerminalSessionState): TerminalSummary {
   return {
     threadId: session.threadId,
@@ -465,6 +470,15 @@ function cleanupProcessHandles(session: TerminalSessionState): void {
   session.unsubscribeData = null;
   session.unsubscribeExit?.();
   session.unsubscribeExit = null;
+}
+
+/** Discards queued process output and the state carried between its chunks. */
+function resetProcessOutput(session: TerminalSessionState): void {
+  session.pendingHistoryControlSequence = "";
+  session.unansweredQueries = "";
+  session.pendingProcessEvents = [];
+  session.pendingProcessEventIndex = 0;
+  session.processEventDrainRunning = false;
 }
 
 function enqueueProcessEvent(
@@ -1239,7 +1253,11 @@ function sanitizeTerminalHistoryChunk(
   return { visibleText, strippedText, pendingControlSequence: "" };
 }
 
-/** Keeps the latest whole query sequences; a shell only waits on its most recent ones. */
+/**
+ * Adds one chunk's stripped queries. Past the cap only the newest chunk's are kept,
+ * since a shell waits on its latest queries. A chunk over the cap on its own is a
+ * flood rather than a shell waiting, so it is dropped instead of replayed.
+ */
 function appendUnansweredQueries(current: string, queries: string): string {
   if (queries.length === 0) return current;
   if (current.length + queries.length <= MAX_UNANSWERED_QUERIES_LENGTH) {
@@ -2083,11 +2101,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
         session.hasRunningSubprocess = false;
         session.childCommandLabel = null;
         session.status = "exited";
-        session.pendingHistoryControlSequence = "";
-        session.unansweredQueries = "";
-        session.pendingProcessEvents = [];
-        session.pendingProcessEventIndex = 0;
-        session.processEventDrainRunning = false;
+        resetProcessOutput(session);
         session.exitCode = Number.isInteger(nextEvent.event.exitCode)
           ? nextEvent.event.exitCode
           : null;
@@ -2156,11 +2170,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
       session.hasRunningSubprocess = false;
       session.childCommandLabel = null;
       session.status = "exited";
-      session.pendingHistoryControlSequence = "";
-      session.unansweredQueries = "";
-      session.pendingProcessEvents = [];
-      session.pendingProcessEventIndex = 0;
-      session.processEventDrainRunning = false;
+      resetProcessOutput(session);
       session.updatedAt = updatedAt;
       return [undefined, state] as const;
     });
@@ -2660,7 +2670,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
         },
         "started",
       );
-      return snapshot(session);
+      return session;
     }
 
     const liveSession = existing.value;
@@ -2682,21 +2692,13 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
       liveSession.worktreePath = nextWorktreePath;
       liveSession.runtimeEnv = nextRuntimeEnv;
       liveSession.history.clear();
-      liveSession.pendingHistoryControlSequence = "";
-      liveSession.unansweredQueries = "";
-      liveSession.pendingProcessEvents = [];
-      liveSession.pendingProcessEventIndex = 0;
-      liveSession.processEventDrainRunning = false;
+      resetProcessOutput(liveSession);
       yield* persistHistory(liveSession.threadId, liveSession.terminalId, liveSession.history);
     } else if (liveSession.status === "exited" || liveSession.status === "error") {
       liveSession.runtimeEnv = nextRuntimeEnv;
       liveSession.worktreePath = nextWorktreePath;
       liveSession.history.clear();
-      liveSession.pendingHistoryControlSequence = "";
-      liveSession.unansweredQueries = "";
-      liveSession.pendingProcessEvents = [];
-      liveSession.pendingProcessEventIndex = 0;
-      liveSession.processEventDrainRunning = false;
+      resetProcessOutput(liveSession);
       yield* persistHistory(liveSession.threadId, liveSession.terminalId, liveSession.history);
     }
 
@@ -2714,7 +2716,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
         },
         "started",
       );
-      return snapshot(liveSession);
+      return liveSession;
     }
 
     if (liveSession.cols !== targetCols || liveSession.rows !== targetRows) {
@@ -2724,7 +2726,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
       liveSession.updatedAt = yield* nowIso;
     }
 
-    return snapshot(liveSession);
+    return liveSession;
   });
 
   const openLocked = (input: TerminalOpenInput) =>
@@ -2736,60 +2738,62 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
   const open: TerminalManager["Service"]["open"] = (input) =>
     withThreadLock(
       input.threadId,
-      resolveLaunchInputEnvironment(input).pipe(Effect.flatMap(openLocked)),
+      resolveLaunchInputEnvironment(input).pipe(
+        Effect.flatMap((resolvedInput) => openLocked(resolvedInput)),
+        Effect.map((session) => snapshot(session)),
+      ),
     );
 
-  const openOrAttachForStream = (input: TerminalAttachInput) =>
-    withThreadLock(
-      input.threadId,
-      Effect.gen(function* () {
-        const terminalId = input.terminalId;
-        const existing = yield* getSession(input.threadId, terminalId);
+  const openOrAttachForStream = Effect.fn("terminal.openOrAttachForStream")(
+    function* (input: TerminalAttachInput) {
+      const terminalId = input.terminalId;
+      const existing = yield* getSession(input.threadId, terminalId);
 
-        if (Option.isNone(existing)) {
-          if (!input.cwd) {
-            return yield* new TerminalSessionLookupError({
-              threadId: input.threadId,
-              terminalId,
-            });
-          }
-
-          const resolvedInput = yield* resolveLaunchInputEnvironment({
-            ...input,
+      if (Option.isNone(existing)) {
+        if (!input.cwd) {
+          return yield* new TerminalSessionLookupError({
+            threadId: input.threadId,
             terminalId,
-            cwd: input.cwd,
           });
-          return { snapshot: yield* openLocked(resolvedInput), unansweredQueries: "" };
         }
 
-        const session = existing.value;
-        const targetCols = input.cols ?? session.cols;
-        const targetRows = input.rows ?? session.rows;
+        const resolvedInput = yield* resolveLaunchInputEnvironment({
+          ...input,
+          terminalId,
+          cwd: input.cwd,
+        });
+        return attachState(yield* openLocked(resolvedInput));
+      }
 
-        if (!session.process && input.cwd && input.restartIfNotRunning === true) {
-          const resolvedInput = yield* resolveLaunchInputEnvironment({
-            ...input,
-            terminalId,
-            cwd: input.cwd,
-          });
-          return { snapshot: yield* openLocked(resolvedInput), unansweredQueries: "" };
-        }
+      const session = existing.value;
+      const targetCols = input.cols ?? session.cols;
+      const targetRows = input.rows ?? session.rows;
 
-        if (
-          session.process &&
-          session.status === "running" &&
-          (session.cols !== targetCols || session.rows !== targetRows)
-        ) {
-          const process = session.process;
-          yield* resizePtyProcess(session, process, targetCols, targetRows);
-          session.cols = targetCols;
-          session.rows = targetRows;
-          session.updatedAt = yield* nowIso;
-        }
+      if (!session.process && input.cwd && input.restartIfNotRunning === true) {
+        const resolvedInput = yield* resolveLaunchInputEnvironment({
+          ...input,
+          terminalId,
+          cwd: input.cwd,
+        });
+        return attachState(yield* openLocked(resolvedInput));
+      }
 
-        return { snapshot: snapshot(session), unansweredQueries: session.unansweredQueries };
-      }),
-    );
+      if (
+        session.process &&
+        session.status === "running" &&
+        (session.cols !== targetCols || session.rows !== targetRows)
+      ) {
+        const process = session.process;
+        yield* resizePtyProcess(session, process, targetCols, targetRows);
+        session.cols = targetCols;
+        session.rows = targetRows;
+        session.updatedAt = yield* nowIso;
+      }
+
+      return attachState(session);
+    },
+    (effect, input) => withThreadLock(input.threadId, effect),
+  );
 
   const readAllTerminalMetadata = () =>
     readManagerState.pipe(
@@ -2828,8 +2832,9 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
       const bufferedEvents: TerminalEvent[] = [];
       let deliverLive = false;
       // Output committed before the snapshot can still be mid-publish when this
-      // stream goes live. Drop it until an event passes the snapshot; sequences
-      // only restart for a new session, which begins with a lifecycle event.
+      // stream goes live, so drop output the snapshot covers. Sequences restart
+      // only for a new session, which begins with a lifecycle event. Those are
+      // published under the thread lock, so they always follow the snapshot.
       let coveredBy: TerminalSessionSnapshot | null = null;
 
       unsubscribe = yield* subscribe((event) => {
@@ -2842,11 +2847,14 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
           return Effect.void;
         }
 
-        if (coveredBy !== null) {
-          if (event.type === "output" && isDuplicateAttachSnapshotEvent(event, coveredBy)) {
-            return Effect.void;
-          }
+        if (event.type === "started" || event.type === "restarted") {
           coveredBy = null;
+        } else if (
+          event.type === "output" &&
+          coveredBy !== null &&
+          isDuplicateAttachSnapshotEvent(event, coveredBy)
+        ) {
+          return Effect.void;
         }
 
         const attachEvent = terminalEventToAttachEvent(event);
@@ -2995,10 +3003,14 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
       });
     }
     session.inputCount += 1;
-    // A client answers queries as soon as it parses them, so input means none are pending.
-    session.unansweredQueries = "";
     yield* Effect.try({
-      try: () => process.write(input.data),
+      try: () => {
+        process.write(input.data);
+        // A client answers queries as soon as it parses them, so input that reached
+        // the shell means none are pending. Cleared in the same step as the write so
+        // queries printed after it survive.
+        session.unansweredQueries = "";
+      },
       catch: (cause) =>
         new TerminalWriteError({
           threadId: input.threadId,
@@ -3035,11 +3047,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
         const terminalId = input.terminalId;
         const session = yield* requireSession(input.threadId, terminalId);
         session.history.clear();
-        session.pendingHistoryControlSequence = "";
-        session.unansweredQueries = "";
-        session.pendingProcessEvents = [];
-        session.pendingProcessEventIndex = 0;
-        session.processEventDrainRunning = false;
+        resetProcessOutput(session);
         const eventStamp = advanceEventSequence(session);
         yield* persistHistory(input.threadId, terminalId, session.history);
         yield* publishEvent({
@@ -3109,11 +3117,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
       const rows = input.rows ?? session.rows;
 
       session.history.clear();
-      session.pendingHistoryControlSequence = "";
-      session.unansweredQueries = "";
-      session.pendingProcessEvents = [];
-      session.pendingProcessEventIndex = 0;
-      session.processEventDrainRunning = false;
+      resetProcessOutput(session);
       yield* persistHistory(input.threadId, terminalId, session.history);
       yield* startSession(
         session,
