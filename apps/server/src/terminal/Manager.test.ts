@@ -210,6 +210,34 @@ function attachTranscript(events: ReadonlyArray<TerminalAttachStreamEvent>) {
   );
 }
 
+/** Emits shell output and waits until the manager has published it. */
+const makePrinter = Effect.fnUntraced(function* (
+  manager: TerminalManager.TerminalManager["Service"],
+  ptyAdapter: FakePtyAdapter,
+) {
+  const printed = yield* Queue.unbounded<void>();
+  const unsubscribe = yield* manager.subscribe((event) =>
+    event.type === "output" ? Queue.offer(printed, undefined).pipe(Effect.asVoid) : Effect.void,
+  );
+  yield* Effect.addFinalizer(() => Effect.sync(unsubscribe));
+  return (data: string, shellIndex = 0) =>
+    Effect.sync(() => ptyAdapter.processes[shellIndex]?.emitData(data)).pipe(
+      Effect.andThen(Queue.take(printed)),
+    );
+});
+
+/** Attaches, detaches once the stream is live, and returns what it showed. */
+const attachOnce = Effect.fnUntraced(function* (
+  manager: TerminalManager.TerminalManager["Service"],
+) {
+  const events: TerminalAttachStreamEvent[] = [];
+  const detach = yield* manager.attachStream(openInput(), (event) =>
+    Effect.sync(() => events.push(event)),
+  );
+  detach();
+  return attachTranscript(events);
+});
+
 const historyLogPath = (logsDir: string, threadId = "thread-1") =>
   Effect.service(Path.Path).pipe(
     Effect.map(({ join }) => join(logsDir, `terminal_${Base64Url.encode(threadId)}.log`)),
@@ -504,24 +532,10 @@ it.layer(
     Effect.gen(function* () {
       const { manager, ptyAdapter } = yield* createManager();
       yield* manager.open(openInput());
+      const print = yield* makePrinter(manager, ptyAdapter);
       const shell = ptyAdapter.processes[0];
       expect(shell).toBeDefined();
       if (!shell) return;
-      const printed = yield* Queue.unbounded<void>();
-      const unsubscribe = yield* manager.subscribe((event) =>
-        event.type === "output" ? Queue.offer(printed, undefined).pipe(Effect.asVoid) : Effect.void,
-      );
-      yield* Effect.addFinalizer(() => Effect.sync(unsubscribe));
-      const print = (data: string) =>
-        Effect.sync(() => shell.emitData(data)).pipe(Effect.andThen(Queue.take(printed)));
-      const attach = Effect.gen(function* () {
-        const events: TerminalAttachStreamEvent[] = [];
-        const detach = yield* manager.attachStream(openInput(), (event) =>
-          Effect.sync(() => events.push(event)),
-        );
-        detach();
-        return attachTranscript(events);
-      });
       const reply = {
         threadId: "thread-1",
         terminalId: DEFAULT_TERMINAL_ID,
@@ -531,36 +545,29 @@ it.layer(
       // A shell prints startup queries before any client attaches, then waits for
       // the replies (fish 4.1+ blocks on DA1).
       yield* print("prompt \u001b[0c");
-      expect(yield* attach).toEqual(["prompt ", "\u001b[0c"]);
+      expect(yield* attachOnce(manager)).toEqual(["prompt ", "\u001b[0c"]);
 
-      // A reply that never reached the shell leaves its queries pending.
+      // A reply that never reached the shell, or input that is not a reply, leaves
+      // them pending.
       shell.writeFailure = new Error("PTY input handle is unavailable");
       yield* Effect.flip(manager.write(reply));
       shell.writeFailure = undefined;
-      expect(yield* attach).toEqual(["prompt ", "\u001b[0c"]);
-
-      // Input that is not a reply, like a command sent before any renderer
-      // attached, leaves them pending too.
       yield* manager.write({ ...reply, data: "ls\r" });
-      expect(yield* attach).toEqual(["prompt ", "\u001b[0c"]);
+      expect(yield* attachOnce(manager)).toEqual(["prompt ", "\u001b[0c"]);
 
-      // After a client's reply, attaching replays history alone.
+      // A client's reply answers them.
       yield* manager.write(reply);
-      expect(yield* attach).toEqual(["prompt "]);
+      expect(yield* attachOnce(manager)).toEqual(["prompt "]);
 
-      // Text printed after a query means whatever asked stopped waiting; text
-      // before it does not.
+      // Text printed after a query means whatever asked stopped waiting.
       yield* print("\u001b[0c");
       yield* print("gave up\r\n$ ");
-      expect(yield* attach).toEqual(["prompt gave up\r\n$ "]);
-      yield* print("\u001b[0c");
-      expect(yield* attach).toEqual(["prompt gave up\r\n$ ", "\u001b[0c"]);
-      yield* manager.write(reply);
+      expect(yield* attachOnce(manager)).toEqual(["prompt gave up\r\n$ "]);
 
       // A restarted shell never sent the old shell's queries.
       yield* print("\u001b[0c");
       yield* manager.restart(restartInput());
-      expect(yield* attach).toEqual([""]);
+      expect(yield* attachOnce(manager)).toEqual([""]);
     }),
   );
 
@@ -572,28 +579,14 @@ it.layer(
       yield* Effect.addFinalizer(() =>
         Effect.sync(() => ptyAdapter.processes[0]?.emitExit({ exitCode: 0, signal: 0 })),
       );
-      const printed = yield* Queue.unbounded<void>();
-      const unsubscribe = yield* manager.subscribe((event) =>
-        event.type === "output" ? Queue.offer(printed, undefined).pipe(Effect.asVoid) : Effect.void,
-      );
-      yield* Effect.addFinalizer(() => Effect.sync(unsubscribe));
-      const attach = Effect.gen(function* () {
-        const events: TerminalAttachStreamEvent[] = [];
-        const detach = yield* manager.attachStream(openInput(), (event) =>
-          Effect.sync(() => events.push(event)),
-        );
-        detach();
-        return attachTranscript(events);
-      });
+      const print = yield* makePrinter(manager, ptyAdapter);
 
-      yield* Effect.sync(() => ptyAdapter.processes[0]?.emitData("prompt \u001b[0c")).pipe(
-        Effect.andThen(Queue.take(printed)),
-      );
+      yield* print("prompt \u001b[0c");
       // A shell waits at most 10 s for a reply.
       yield* TestClock.adjust("10 seconds");
-      expect(yield* attach).toEqual(["prompt ", "\u001b[0c"]);
+      expect(yield* attachOnce(manager)).toEqual(["prompt ", "\u001b[0c"]);
       yield* TestClock.adjust("1 millis");
-      expect(yield* attach).toEqual(["prompt "]);
+      expect(yield* attachOnce(manager)).toEqual(["prompt "]);
     }).pipe(Effect.provide(TestClock.layer())),
   );
 
@@ -601,9 +594,6 @@ it.layer(
     Effect.gen(function* () {
       const { manager, ptyAdapter } = yield* createManager();
       yield* manager.open(openInput());
-      const shell = ptyAdapter.processes[0];
-      expect(shell).toBeDefined();
-      if (!shell) return;
       // Hold the output's publish after the drain has committed it to the session.
       const held = yield* Deferred.make<void>();
       const release = yield* Deferred.make<void>();
@@ -613,7 +603,7 @@ it.layer(
           : Effect.void,
       );
       yield* Effect.addFinalizer(() => Effect.sync(stopHolding));
-      shell.emitData("prompt \u001b[0c");
+      ptyAdapter.processes[0]?.emitData("prompt \u001b[0c");
       yield* Deferred.await(held);
 
       const events: TerminalAttachStreamEvent[] = [];
@@ -643,19 +633,9 @@ it.layer(
     Effect.gen(function* () {
       const { manager, ptyAdapter } = yield* createManager();
       yield* manager.open(openInput());
-      const printed = yield* Queue.unbounded<void>();
-      const unsubscribe = yield* manager.subscribe((event) =>
-        event.type === "output" ? Queue.offer(printed, undefined).pipe(Effect.asVoid) : Effect.void,
-      );
-      yield* Effect.addFinalizer(() => Effect.sync(unsubscribe));
-      const print = (shellIndex: number, data: string) =>
-        Effect.sync(() => ptyAdapter.processes[shellIndex]?.emitData(data)).pipe(
-          Effect.andThen(Queue.take(printed)),
-        );
+      const print = yield* makePrinter(manager, ptyAdapter);
       // Enough events that the first shell's sequence passes where a new one starts.
-      yield* print(0, "a");
-      yield* print(0, "b");
-      yield* print(0, "c");
+      for (const data of ["a", "b", "c"]) yield* print(data);
 
       // Hold the attach between its snapshot and going live.
       const snapshotted = yield* Deferred.make<void>();
@@ -679,11 +659,11 @@ it.layer(
         deleteHistory: true,
       });
       yield* manager.open(openInput());
-      yield* print(1, "new");
+      yield* print("new", 1);
       yield* Deferred.succeed(release, undefined);
       const detach = yield* Fiber.join(attaching);
       yield* Effect.addFinalizer(() => Effect.sync(detach));
-      yield* print(1, "live");
+      yield* print("live", 1);
 
       expect(attachTranscript(events)).toEqual(["abc", "closed", "", "new", "live"]);
     }),
@@ -700,13 +680,7 @@ it.layer(
       );
       yield* Effect.addFinalizer(() => Effect.sync(unsubscribe));
 
-      const events: TerminalAttachStreamEvent[] = [];
-      const detach = yield* manager.attachStream(openInput(), (event) =>
-        Effect.sync(() => events.push(event)),
-      );
-      yield* Effect.addFinalizer(() => Effect.sync(detach));
-
-      expect(attachTranscript(events)).toEqual(["prompt ", "\u001b[0c"]);
+      expect(yield* attachOnce(manager)).toEqual(["prompt ", "\u001b[0c"]);
     }),
   );
 

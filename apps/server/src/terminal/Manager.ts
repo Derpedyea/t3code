@@ -1115,15 +1115,7 @@ function findEscapeSequenceEndIndex(input: string, start: number): number | null
  * `printedAfterQueries` is whether printable text follows the chunk's last
  * stripped sequence, or appears at all when nothing was stripped.
  */
-function sanitizeTerminalHistoryChunk(
-  pendingControlSequence: string,
-  data: string,
-): {
-  visibleText: string;
-  strippedText: string;
-  printedAfterQueries: boolean;
-  pendingControlSequence: string;
-} {
+function sanitizeTerminalHistoryChunk(pendingControlSequence: string, data: string) {
   const input = `${pendingControlSequence}${data}`;
   let visibleText = "";
   let strippedText = "";
@@ -1137,6 +1129,12 @@ function sanitizeTerminalHistoryChunk(
     strippedText += value;
     printedAfterQueries = false;
   };
+  const finish = (pending: string) => ({
+    visibleText,
+    strippedText,
+    printedAfterQueries,
+    pendingControlSequence: pending,
+  });
 
   while (index < input.length) {
     const codePoint = input.charCodeAt(index);
@@ -1144,12 +1142,7 @@ function sanitizeTerminalHistoryChunk(
     if (codePoint === 0x1b) {
       const nextCodePoint = input.charCodeAt(index + 1);
       if (Number.isNaN(nextCodePoint)) {
-        return {
-          visibleText,
-          strippedText,
-          printedAfterQueries,
-          pendingControlSequence: input.slice(index),
-        };
+        return finish(input.slice(index));
       }
 
       if (nextCodePoint === 0x5b) {
@@ -1169,12 +1162,7 @@ function sanitizeTerminalHistoryChunk(
           cursor += 1;
         }
         if (cursor >= input.length) {
-          return {
-            visibleText,
-            strippedText,
-            printedAfterQueries,
-            pendingControlSequence: input.slice(index),
-          };
+          return finish(input.slice(index));
         }
         continue;
       }
@@ -1187,12 +1175,7 @@ function sanitizeTerminalHistoryChunk(
       ) {
         const terminatorIndex = findStringTerminatorIndex(input, index + 2);
         if (terminatorIndex === null) {
-          return {
-            visibleText,
-            strippedText,
-            printedAfterQueries,
-            pendingControlSequence: input.slice(index),
-          };
+          return finish(input.slice(index));
         }
         const sequence = input.slice(index, terminatorIndex);
         const content = stripStringTerminator(input.slice(index + 2, terminatorIndex));
@@ -1210,12 +1193,7 @@ function sanitizeTerminalHistoryChunk(
 
       const escapeSequenceEndIndex = findEscapeSequenceEndIndex(input, index + 1);
       if (escapeSequenceEndIndex === null) {
-        return {
-          visibleText,
-          strippedText,
-          printedAfterQueries,
-          pendingControlSequence: input.slice(index),
-        };
+        return finish(input.slice(index));
       }
       append(input.slice(index, escapeSequenceEndIndex));
       index = escapeSequenceEndIndex;
@@ -1239,12 +1217,7 @@ function sanitizeTerminalHistoryChunk(
         cursor += 1;
       }
       if (cursor >= input.length) {
-        return {
-          visibleText,
-          strippedText,
-          printedAfterQueries,
-          pendingControlSequence: input.slice(index),
-        };
+        return finish(input.slice(index));
       }
       continue;
     }
@@ -1252,12 +1225,7 @@ function sanitizeTerminalHistoryChunk(
     if (codePoint === 0x9d || codePoint === 0x90 || codePoint === 0x9e || codePoint === 0x9f) {
       const terminatorIndex = findStringTerminatorIndex(input, index + 1);
       if (terminatorIndex === null) {
-        return {
-          visibleText,
-          strippedText,
-          printedAfterQueries,
-          pendingControlSequence: input.slice(index),
-        };
+        return finish(input.slice(index));
       }
       const sequence = input.slice(index, terminatorIndex);
       const content = stripStringTerminator(input.slice(index + 1, terminatorIndex));
@@ -1280,7 +1248,7 @@ function sanitizeTerminalHistoryChunk(
     index += 1;
   }
 
-  return { visibleText, strippedText, printedAfterQueries, pendingControlSequence: "" };
+  return finish("");
 }
 
 /**
