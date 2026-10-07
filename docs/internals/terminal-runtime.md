@@ -45,8 +45,10 @@ during replay. Preserve both protections when changing retention or renderer cod
 
 Queries no client has answered yet are the exception. A shell can print startup
 queries before any renderer attaches and then block on the reply (fish waits 10 s
-for DA1). The [server](../../apps/server/src/terminal/Manager.ts) keeps the query
-traffic stripped since the last input and sends it right after an attach snapshot.
-On a reset, the [client output buffer](../../packages/client-runtime/src/state/terminalOutput.ts)
-replays the snapshot muted and answers only output no renderer has parsed. Input
-clears the stored queries, because a renderer replies as soon as it parses a query.
+for DA1). The [server](../../apps/server/src/terminal/Manager.ts) keeps that stripped
+query traffic and sends it right after an attach snapshot, but only while something
+can still be waiting on it: until a client's reply arrives, printable output follows
+the query, or 10 s pass. A stream's first
+[renderer](../../apps/web/src/components/ThreadTerminalDrawer.tsx) answers the output
+that arrived after its snapshot. A remount replays everything muted, because it
+cannot tell whether whatever asked is still waiting.

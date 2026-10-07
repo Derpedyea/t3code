@@ -293,15 +293,9 @@ export function terminalOutputText(output: TerminalOutputState): string {
   return output.chunks.map((chunk) => chunk.data).join("");
 }
 
-/**
- * Read what a renderer at `cursor` still has to draw. `parsed` is how far any
- * renderer of this output has parsed it, so a remounted renderer replays that
- * part without answering its terminal queries twice.
- */
 export function readTerminalOutputUpdate(
   output: TerminalOutputState,
   cursor: TerminalOutputCursor,
-  parsed: TerminalOutputCursor = cursor,
 ): TerminalOutputUpdate {
   const nextCursor = {
     generation: output.generation,
@@ -315,11 +309,7 @@ export function readTerminalOutputUpdate(
     cursor.offset < firstOffset
   ) {
     const text = terminalOutputText(output);
-    const parsedOffset =
-      parsed.generation === output.generation && parsed.resetVersion === output.resetVersion
-        ? parsed.offset
-        : 0;
-    const split = Math.max(0, Math.max(output.liveOffset, parsedOffset) - firstOffset);
+    const split = Math.max(0, output.liveOffset - firstOffset);
     return {
       type: "reset",
       data: text.slice(0, split),

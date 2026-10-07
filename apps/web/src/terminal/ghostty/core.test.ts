@@ -285,27 +285,29 @@ describe("GhosttyTerminalCore snapshots", () => {
     expect({ type: update.type, replies }).toEqual({ type: "append", replies: ["\x1b[0n"] });
   });
 
-  it("answers queries that streamed in before a renderer mounted, once across remounts", async () => {
+  it("answers queries that streamed in before a stream's first render, and none on a remount", async () => {
     const replies: string[] = [];
     // A shell's startup query lands after the snapshot but before the WASM loads.
     let state = createSession("prompt ");
     state = append(state, "\x1b[5n");
     const first = await createCore((data) => replies.push(data));
-    const mounted = readTerminalOutputUpdate(state.output, INITIAL_TERMINAL_OUTPUT_CURSOR);
-    writeTerminalOutputUpdate(first, mounted);
+    writeTerminalOutputUpdate(
+      first,
+      readTerminalOutputUpdate(state.output, INITIAL_TERMINAL_OUTPUT_CURSOR),
+    );
     expect(replies).toEqual(["\x1b[0n"]);
 
-    // A remount replays that query silently and answers only what came after.
+    // Whatever asked while no renderer was mounted may have stopped waiting, so a
+    // remount replays everything muted.
     first.dispose();
     state = append(state, "\x1b[5n");
     const second = await createCore((data) => replies.push(data));
-    const remounted = readTerminalOutputUpdate(
-      state.output,
-      INITIAL_TERMINAL_OUTPUT_CURSOR,
-      mounted.cursor,
+    writeTerminalOutputUpdate(
+      second,
+      readTerminalOutputUpdate(state.output, INITIAL_TERMINAL_OUTPUT_CURSOR),
+      false,
     );
-    writeTerminalOutputUpdate(second, remounted);
-    expect(replies).toEqual(["\x1b[0n", "\x1b[0n"]);
+    expect(replies).toEqual(["\x1b[0n"]);
   });
 
   it("recovers a lagging renderer once from bounded output and resumes appending", async () => {

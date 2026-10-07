@@ -46,6 +46,7 @@ import { mergePathEntries } from "@t3tools/shared/shell";
 
 import { acpRegistryManagedBinaryDirectories } from "../provider/acp/AcpRegistrySupport.ts";
 import { getTerminalLabel } from "@t3tools/shared/terminalLabels";
+import * as Clock from "effect/Clock";
 import * as DateTime from "effect/DateTime";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -96,6 +97,8 @@ export {
 const DEFAULT_HISTORY_LINE_LIMIT = 5_000;
 const DEFAULT_HISTORY_BYTE_LIMIT = 8 * 1024 * 1024;
 const MAX_UNANSWERED_QUERIES_LENGTH = 4096;
+/** fish waits 10 s for a DA1 reply; nothing still waits on a query older than that. */
+const UNANSWERED_QUERY_TTL_MS = 10_000;
 const MAX_HISTORY_CHUNK_LENGTH = 16 * 1024;
 const DEFAULT_PERSIST_DEBOUNCE_MS = 40;
 const DEFAULT_SUBPROCESS_POLL_INTERVAL_MS = 1_000;
@@ -283,8 +286,10 @@ interface TerminalSessionState {
   pid: number | null;
   history: BoundedTerminalHistory;
   pendingHistoryControlSequence: string;
-  /** Query traffic stripped from history since the last input; no client has answered it. */
+  /** Query traffic stripped from history that no client reply has answered yet. */
   unansweredQueries: string;
+  /** When the latest of `unansweredQueries` arrived. */
+  unansweredQueriesAt: number;
   pendingProcessEvents: Array<PendingProcessEvent>;
   pendingProcessEventIndex: number;
   processEventDrainRunning: boolean;
@@ -390,8 +395,8 @@ function snapshot(session: TerminalSessionState): TerminalSessionSnapshot {
 }
 
 /** What an attach replays: the snapshot, then queries its shell may still be waiting on. */
-function attachState(session: TerminalSessionState) {
-  return { snapshot: snapshot(session), unansweredQueries: session.unansweredQueries };
+function attachState(session: TerminalSessionState, now: number) {
+  return { snapshot: snapshot(session), unansweredQueries: pendingQueries(session, now) };
 }
 
 function summary(session: TerminalSessionState): TerminalSummary {
@@ -453,16 +458,6 @@ function isDuplicateAttachSnapshotEvent(
         event.snapshot.threadId === initialSnapshot.threadId &&
         event.snapshot.terminalId === initialSnapshot.terminalId &&
         event.snapshot.updatedAt <= initialSnapshot.updatedAt;
-}
-
-function advanceEventSequence(session: TerminalSessionState): {
-  readonly updatedAt: string;
-  readonly sequence: number;
-} {
-  const updatedAt = DateTime.formatIso(DateTime.nowUnsafe());
-  session.eventSequence += 1;
-  session.updatedAt = updatedAt;
-  return { updatedAt, sequence: session.eventSequence };
 }
 
 function cleanupProcessHandles(session: TerminalSessionState): void {
@@ -1115,14 +1110,24 @@ function findEscapeSequenceEndIndex(input: string, start: number): number | null
   return isEscapeFinalByte(input.charCodeAt(cursor)) ? cursor + 1 : start + 1;
 }
 
-/** Splits output into replayable history and the query traffic stripped from it. */
+/**
+ * Splits output into replayable history and the query traffic stripped from it.
+ * `printedAfterQueries` is whether printable text follows the chunk's last
+ * stripped sequence, or appears at all when nothing was stripped.
+ */
 function sanitizeTerminalHistoryChunk(
   pendingControlSequence: string,
   data: string,
-): { visibleText: string; strippedText: string; pendingControlSequence: string } {
+): {
+  visibleText: string;
+  strippedText: string;
+  printedAfterQueries: boolean;
+  pendingControlSequence: string;
+} {
   const input = `${pendingControlSequence}${data}`;
   let visibleText = "";
   let strippedText = "";
+  let printedAfterQueries = false;
   let index = 0;
 
   const append = (value: string) => {
@@ -1130,6 +1135,7 @@ function sanitizeTerminalHistoryChunk(
   };
   const strip = (value: string) => {
     strippedText += value;
+    printedAfterQueries = false;
   };
 
   while (index < input.length) {
@@ -1138,7 +1144,12 @@ function sanitizeTerminalHistoryChunk(
     if (codePoint === 0x1b) {
       const nextCodePoint = input.charCodeAt(index + 1);
       if (Number.isNaN(nextCodePoint)) {
-        return { visibleText, strippedText, pendingControlSequence: input.slice(index) };
+        return {
+          visibleText,
+          strippedText,
+          printedAfterQueries,
+          pendingControlSequence: input.slice(index),
+        };
       }
 
       if (nextCodePoint === 0x5b) {
@@ -1158,7 +1169,12 @@ function sanitizeTerminalHistoryChunk(
           cursor += 1;
         }
         if (cursor >= input.length) {
-          return { visibleText, strippedText, pendingControlSequence: input.slice(index) };
+          return {
+            visibleText,
+            strippedText,
+            printedAfterQueries,
+            pendingControlSequence: input.slice(index),
+          };
         }
         continue;
       }
@@ -1171,7 +1187,12 @@ function sanitizeTerminalHistoryChunk(
       ) {
         const terminatorIndex = findStringTerminatorIndex(input, index + 2);
         if (terminatorIndex === null) {
-          return { visibleText, strippedText, pendingControlSequence: input.slice(index) };
+          return {
+            visibleText,
+            strippedText,
+            printedAfterQueries,
+            pendingControlSequence: input.slice(index),
+          };
         }
         const sequence = input.slice(index, terminatorIndex);
         const content = stripStringTerminator(input.slice(index + 2, terminatorIndex));
@@ -1189,7 +1210,12 @@ function sanitizeTerminalHistoryChunk(
 
       const escapeSequenceEndIndex = findEscapeSequenceEndIndex(input, index + 1);
       if (escapeSequenceEndIndex === null) {
-        return { visibleText, strippedText, pendingControlSequence: input.slice(index) };
+        return {
+          visibleText,
+          strippedText,
+          printedAfterQueries,
+          pendingControlSequence: input.slice(index),
+        };
       }
       append(input.slice(index, escapeSequenceEndIndex));
       index = escapeSequenceEndIndex;
@@ -1213,7 +1239,12 @@ function sanitizeTerminalHistoryChunk(
         cursor += 1;
       }
       if (cursor >= input.length) {
-        return { visibleText, strippedText, pendingControlSequence: input.slice(index) };
+        return {
+          visibleText,
+          strippedText,
+          printedAfterQueries,
+          pendingControlSequence: input.slice(index),
+        };
       }
       continue;
     }
@@ -1221,7 +1252,12 @@ function sanitizeTerminalHistoryChunk(
     if (codePoint === 0x9d || codePoint === 0x90 || codePoint === 0x9e || codePoint === 0x9f) {
       const terminatorIndex = findStringTerminatorIndex(input, index + 1);
       if (terminatorIndex === null) {
-        return { visibleText, strippedText, pendingControlSequence: input.slice(index) };
+        return {
+          visibleText,
+          strippedText,
+          printedAfterQueries,
+          pendingControlSequence: input.slice(index),
+        };
       }
       const sequence = input.slice(index, terminatorIndex);
       const content = stripStringTerminator(input.slice(index + 1, terminatorIndex));
@@ -1237,11 +1273,14 @@ function sanitizeTerminalHistoryChunk(
       continue;
     }
 
+    if ((codePoint >= 0x20 && codePoint !== 0x7f && codePoint < 0x80) || codePoint >= 0xa0) {
+      printedAfterQueries = true;
+    }
     append(input[index] ?? "");
     index += 1;
   }
 
-  return { visibleText, strippedText, pendingControlSequence: "" };
+  return { visibleText, strippedText, printedAfterQueries, pendingControlSequence: "" };
 }
 
 /**
@@ -1250,11 +1289,22 @@ function sanitizeTerminalHistoryChunk(
  * flood rather than a shell waiting, so it is dropped instead of replayed.
  */
 function appendUnansweredQueries(current: string, queries: string): string {
-  if (queries.length === 0) return current;
   if (current.length + queries.length <= MAX_UNANSWERED_QUERIES_LENGTH) {
     return `${current}${queries}`;
   }
   return queries.length <= MAX_UNANSWERED_QUERIES_LENGTH ? queries : "";
+}
+
+/** Stored queries a shell may still be waiting on. */
+function pendingQueries(session: TerminalSessionState, now: number): string {
+  return now - session.unansweredQueriesAt <= UNANSWERED_QUERY_TTL_MS
+    ? session.unansweredQueries
+    : "";
+}
+
+/** Whether input carries a reply to a terminal query, the traffic history strips. */
+function containsTerminalReply(data: string): boolean {
+  return sanitizeTerminalHistoryChunk("", data).strippedText.length > 0;
 }
 
 function legacySafeThreadId(threadId: string): string {
@@ -1607,6 +1657,17 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
   const terminalEventListeners = new Set<(event: TerminalEvent) => Effect.Effect<void>>();
   const workerScope = yield* Scope.make("sequential");
   yield* Effect.addFinalizer(() => Scope.close(workerScope, Exit.void));
+
+  // One counter for every session, so a terminal's sequences keep growing when it
+  // closes and reopens, and an attach can tell covered events apart by sequence.
+  let lastEventSequence = 0;
+  const advanceEventSequence = (session: TerminalSessionState) => {
+    const updatedAt = DateTime.formatIso(DateTime.nowUnsafe());
+    lastEventSequence += 1;
+    session.eventSequence = lastEventSequence;
+    session.updatedAt = updatedAt;
+    return { updatedAt, sequence: lastEventSequence };
+  };
 
   const publishEvent = (event: TerminalEvent) =>
     Effect.gen(function* () {
@@ -2038,6 +2099,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
     expectedPid: number,
   ) {
     while (true) {
+      const now = yield* Clock.currentTimeMillis;
       const action: DrainProcessEventAction = yield* Effect.sync(() => {
         if (session.pid !== expectedPid || !session.process || session.status !== "running") {
           session.pendingProcessEvents = [];
@@ -2066,10 +2128,16 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
             nextEvent.data,
           );
           session.pendingHistoryControlSequence = sanitized.pendingControlSequence;
-          session.unansweredQueries = appendUnansweredQueries(
-            session.unansweredQueries,
-            sanitized.strippedText,
-          );
+          if (sanitized.strippedText.length > 0) {
+            session.unansweredQueries = appendUnansweredQueries(
+              pendingQueries(session, now),
+              sanitized.strippedText,
+            );
+            session.unansweredQueriesAt = now;
+          }
+          // A program blocked on a reply prints nothing more, so text after a
+          // query means whatever asked has moved on.
+          if (sanitized.printedAfterQueries) session.unansweredQueries = "";
           if (sanitized.visibleText.length > 0) {
             session.history.append(sanitized.visibleText);
           }
@@ -2630,6 +2698,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
         history,
         pendingHistoryControlSequence: "",
         unansweredQueries: "",
+        unansweredQueriesAt: 0,
         pendingProcessEvents: [],
         pendingProcessEventIndex: 0,
         processEventDrainRunning: false,
@@ -2755,6 +2824,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
     withThreadLock(
       input.threadId,
       Effect.gen(function* () {
+        const now = yield* Clock.currentTimeMillis;
         const terminalId = input.terminalId;
         const existing = yield* getSession(input.threadId, terminalId);
 
@@ -2771,7 +2841,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
             terminalId,
             cwd: input.cwd,
           });
-          return attachState(yield* openLocked(resolvedInput));
+          return attachState(yield* openLocked(resolvedInput), now);
         }
 
         const session = existing.value;
@@ -2784,7 +2854,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
             terminalId,
             cwd: input.cwd,
           });
-          return attachState(yield* openLocked(resolvedInput));
+          return attachState(yield* openLocked(resolvedInput), now);
         }
 
         if (
@@ -2799,7 +2869,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
           session.updatedAt = yield* nowIso;
         }
 
-        return attachState(session);
+        return attachState(session, now);
       }),
     );
 
@@ -2838,30 +2908,21 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
 
     return Effect.gen(function* () {
       const bufferedEvents: TerminalEvent[] = [];
-      let deliverLive = false;
-      // Output committed before the snapshot can still be mid-publish when this
-      // stream goes live, so drop output the snapshot covers. Sequences restart
-      // only for a new session, which begins with a lifecycle event. Those are
-      // published under the thread lock, so they always follow the snapshot.
-      let coveredBy: TerminalSessionSnapshot | null = null;
+      // Set once the stream goes live. Events committed before the snapshot can
+      // still be mid-publish then, so live events it covers are dropped too.
+      let liveSnapshot: TerminalSessionSnapshot | null = null;
 
       unsubscribe = yield* subscribe((event) => {
         if (event.threadId !== input.threadId || event.terminalId !== input.terminalId) {
           return Effect.void;
         }
 
-        if (!deliverLive) {
+        if (liveSnapshot === null) {
           bufferedEvents.push(event);
           return Effect.void;
         }
 
-        if (event.type === "started" || event.type === "restarted") {
-          coveredBy = null;
-        } else if (
-          event.type === "output" &&
-          coveredBy !== null &&
-          isDuplicateAttachSnapshotEvent(event, coveredBy)
-        ) {
+        if (isDuplicateAttachSnapshotEvent(event, liveSnapshot)) {
           return Effect.void;
         }
 
@@ -2876,8 +2937,8 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
         snapshot: initialSnapshot,
       });
 
-      // History drops query traffic, but the shell may still be waiting on it:
-      // fish blocks on DA1 when it starts before any client attaches.
+      // History drops query traffic, but a shell may still be waiting on queries it
+      // printed before any client attached, as fish 4.1+ does on DA1.
       if (unansweredQueries.length > 0) {
         yield* listener({
           type: "output",
@@ -2898,8 +2959,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
         }
       }
 
-      coveredBy = initialSnapshot;
-      deliverLive = true;
+      liveSnapshot = initialSnapshot;
       return () => {
         unsubscribe?.();
         unsubscribe = null;
@@ -3014,10 +3074,12 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
     yield* Effect.try({
       try: () => {
         process.write(input.data);
-        // A client answers queries as soon as it parses them, so input that reached
-        // the shell means none are pending. Cleared in the same step as the write so
-        // queries printed after it survive.
-        session.unansweredQueries = "";
+        // A reply means a client parsed, and so answered, every stored query. Other
+        // input, like a command written before any renderer attached, leaves them.
+        // Cleared in the same step as the write so queries printed after it survive.
+        if (session.unansweredQueries.length > 0 && containsTerminalReply(input.data)) {
+          session.unansweredQueries = "";
+        }
       },
       catch: (cause) =>
         new TerminalWriteError({
@@ -3093,6 +3155,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
           history: new BoundedTerminalHistory(historyLineLimit, "", historyByteLimit),
           pendingHistoryControlSequence: "",
           unansweredQueries: "",
+          unansweredQueriesAt: 0,
           pendingProcessEvents: [],
           pendingProcessEventIndex: 0,
           processEventDrainRunning: false,

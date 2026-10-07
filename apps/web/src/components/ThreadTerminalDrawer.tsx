@@ -108,19 +108,26 @@ function writeSystemMessage(terminal: GhosttyTerminalSurface, message: string): 
   terminal.write(`\r\n[terminal] ${message}\r\n`);
 }
 
-// How far renderers have parsed each attach stream's output, so a remount replays
-// that part silently and answers only newer queries. Keyed by the stream's atom,
-// which is collected with the stream, so entries never outlive it.
-const parsedTerminalOutput = new WeakMap<
-  ReturnType<typeof terminalEnvironment.attach>,
-  TerminalOutputCursor
->();
+// Attach streams a renderer has already drawn. Keyed by the stream's atom, which is
+// collected with the stream, so entries never outlive it.
+const renderedTerminalStreams = new WeakSet<ReturnType<typeof terminalEnvironment.attach>>();
 
+/**
+ * Writes an output update. A reset replays its `data` with replies muted and
+ * answers queries in its `live` part only when `answerLive` is set: a stream's
+ * first renderer answers output that streamed in before it mounted, but a
+ * remount cannot know whether whatever asked is still waiting.
+ */
 export function writeTerminalOutputUpdate(
   terminal: Pick<GhosttyTerminalSurface, "resetAndWrite" | "write">,
   update: TerminalOutputUpdate,
+  answerLive = true,
 ): void {
   if (update.type === "reset") {
+    if (!answerLive) {
+      terminal.resetAndWrite(`${update.data}${update.live}`);
+      return;
+    }
     terminal.resetAndWrite(update.data);
     if (update.live.length > 0) terminal.write(update.live);
   } else if (update.type === "append") {
@@ -419,10 +426,12 @@ export function TerminalViewport({
     ...(providerInstanceId ? { providerInstanceId } : {}),
   };
   const terminalSession = useAttachedTerminalSession({ environmentId, terminal: attachInput });
-  const attachAtom = terminalEnvironment.attach({ environmentId, input: attachInput });
-  const readParsedOutput = useEffectEvent(() => parsedTerminalOutput.get(attachAtom));
-  const recordParsedOutput = useEffectEvent((cursor: TerminalOutputCursor) => {
-    parsedTerminalOutput.set(attachAtom, cursor);
+  // Looked up once per mount rather than per render, since the key serializes the input.
+  const claimFirstRender = useEffectEvent(() => {
+    const attachAtom = terminalEnvironment.attach({ environmentId, input: attachInput });
+    const first = !renderedTerminalStreams.has(attachAtom);
+    renderedTerminalStreams.add(attachAtom);
+    return first;
   });
   const writeTerminal = useEffectEvent((data: string) =>
     runTerminalWrite({
@@ -543,16 +552,15 @@ export function TerminalViewport({
       const initialOutput = readTerminalOutputUpdate(
         latestSession.output,
         INITIAL_TERMINAL_OUTPUT_CURSOR,
-        readParsedOutput(),
       );
+      const firstRender = claimFirstRender();
       if (
         initialOutput.type === "reset" &&
         initialOutput.data.length + initialOutput.live.length > 0
       ) {
-        writeTerminalOutputUpdate(terminal, initialOutput);
+        writeTerminalOutputUpdate(terminal, initialOutput, firstRender);
       }
       outputCursorRef.current = initialOutput.cursor;
-      recordParsedOutput(initialOutput.cursor);
       if (latestSession.error !== null) writeSystemMessage(terminal, latestSession.error);
       // Attaching to a session that already exited must still run exit handling
       // once, so mount synchronization starts from the empty "closed" state.
@@ -961,7 +969,6 @@ export function TerminalViewport({
     const outputUpdate = readTerminalOutputUpdate(current.output, outputCursorRef.current);
     writeTerminalOutputUpdate(terminal, outputUpdate);
     outputCursorRef.current = outputUpdate.cursor;
-    recordParsedOutput(outputUpdate.cursor);
     terminal.clearSelection();
 
     if (current.error !== null && current.error !== previous.error) {
