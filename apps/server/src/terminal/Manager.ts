@@ -28,6 +28,7 @@ import {
   type TerminalEvent,
   type TerminalMetadataStreamEvent,
   type TerminalOpenInput,
+  type TerminalObserveInput,
   type TerminalResizeInput,
   type ResourceMonitorProcessTableEntry,
   type TerminalRestartInput,
@@ -171,6 +172,12 @@ export class TerminalManager extends Context.Service<
      */
     readonly attachStream: (
       input: TerminalAttachInput,
+      listener: (event: TerminalAttachStreamEvent) => Effect.Effect<void>,
+    ) => Effect.Effect<() => void, TerminalError>;
+
+    /** Observe an existing session without starting or changing its process. */
+    readonly observeStream: (
+      input: TerminalObserveInput,
       listener: (event: TerminalAttachStreamEvent) => Effect.Effect<void>,
     ) => Effect.Effect<() => void, TerminalError>;
 
@@ -2871,7 +2878,11 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
       };
     });
 
-  const attachStream: TerminalManager["Service"]["attachStream"] = (input, listener) => {
+  const streamSession = (
+    input: TerminalObserveInput,
+    initial: Effect.Effect<ReturnType<typeof attachState>, TerminalError>,
+    listener: (event: TerminalAttachStreamEvent) => Effect.Effect<void>,
+  ) => {
     let unsubscribe: (() => void) | null = null;
 
     return Effect.gen(function* () {
@@ -2898,7 +2909,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
         return attachEvent ? listener(attachEvent) : Effect.void;
       });
 
-      const { snapshot: initialSnapshot, unansweredQueries } = yield* openOrAttachForStream(input);
+      const { snapshot: initialSnapshot, unansweredQueries } = yield* initial;
 
       yield* listener({
         type: "snapshot",
@@ -2944,6 +2955,22 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
       ),
     );
   };
+
+  const attachStream: TerminalManager["Service"]["attachStream"] = (input, listener) =>
+    streamSession(input, openOrAttachForStream(input), listener);
+
+  // Observers can't write, so stored queries stay for a client that can answer them.
+  const observeStream: TerminalManager["Service"]["observeStream"] = (input, listener) =>
+    streamSession(
+      input,
+      withThreadLock(
+        input.threadId,
+        requireSession(input.threadId, input.terminalId).pipe(
+          Effect.map((session) => ({ snapshot: snapshot(session), unansweredQueries: "" })),
+        ),
+      ),
+      listener,
+    );
 
   const metadataEventFromTerminalEvent = (
     event: TerminalEvent,
@@ -3266,6 +3293,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
   return TerminalManager.of({
     open,
     attachStream,
+    observeStream,
     write,
     resize,
     clear,
