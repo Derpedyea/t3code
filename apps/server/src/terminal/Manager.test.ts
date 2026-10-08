@@ -599,6 +599,18 @@ it.layer(
     }).pipe(Effect.provide(TestClock.layer())),
   );
 
+  it.effect("keeps the newest whole queries when one read exceeds the cap", () =>
+    Effect.gen(function* () {
+      const { manager, ptyAdapter } = yield* createManager();
+      yield* manager.open(openInput());
+      const print = yield* makePrinter(manager, ptyAdapter);
+
+      // 4100 characters of 4-character queries; the shell waits on the last one.
+      yield* print(`${"\u001b[5n".repeat(1024)}\u001b[0c`);
+      expect(yield* attachOnce(manager)).toEqual(["", `${"\u001b[5n".repeat(1023)}\u001b[0c`]);
+    }),
+  );
+
   it.effect("drops live output that its attach snapshot already covers", () =>
     Effect.gen(function* () {
       const { manager, ptyAdapter } = yield* createManager();

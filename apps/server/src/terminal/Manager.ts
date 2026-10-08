@@ -1125,7 +1125,7 @@ function findEscapeSequenceEndIndex(input: string, start: number): number | null
 function sanitizeTerminalHistoryChunk(pendingControlSequence: string, data: string) {
   const input = `${pendingControlSequence}${data}`;
   let visibleText = "";
-  let strippedText = "";
+  const strippedSequences: string[] = [];
   let printedAfterQueries = false;
   let index = 0;
 
@@ -1133,12 +1133,12 @@ function sanitizeTerminalHistoryChunk(pendingControlSequence: string, data: stri
     visibleText += value;
   };
   const strip = (value: string) => {
-    strippedText += value;
+    strippedSequences.push(value);
     printedAfterQueries = false;
   };
   const finish = (pending: string) => ({
     visibleText,
-    strippedText,
+    strippedSequences,
     printedAfterQueries,
     pendingControlSequence: pending,
   });
@@ -1259,15 +1259,21 @@ function sanitizeTerminalHistoryChunk(pendingControlSequence: string, data: stri
 }
 
 /**
- * Adds one chunk's stripped queries. Past the cap only the newest chunk's are kept,
- * since a shell waits on its latest queries. A chunk over the cap on its own is a
- * flood rather than a shell waiting, so it is dropped instead of replayed.
+ * Adds one chunk's stripped queries. Past the cap, earlier chunks' queries are
+ * dropped and this chunk keeps its newest whole queries that fit, since a shell
+ * waits on its latest.
  */
-function appendUnansweredQueries(current: string, queries: string): string {
-  if (current.length + queries.length <= MAX_UNANSWERED_QUERIES_LENGTH) {
-    return `${current}${queries}`;
+function appendUnansweredQueries(current: string, queries: ReadonlyArray<string>): string {
+  const added = queries.join("");
+  if (current.length + added.length <= MAX_UNANSWERED_QUERIES_LENGTH) {
+    return `${current}${added}`;
   }
-  return queries.length <= MAX_UNANSWERED_QUERIES_LENGTH ? queries : "";
+  let kept = "";
+  for (const query of queries.toReversed()) {
+    if (kept.length + query.length > MAX_UNANSWERED_QUERIES_LENGTH) break;
+    kept = `${query}${kept}`;
+  }
+  return kept;
 }
 
 /** Stored queries a shell may still be waiting on. */
@@ -1279,7 +1285,7 @@ function pendingQueries(session: TerminalSessionState, now: number): string {
 
 /** Whether input carries a reply to a terminal query, the traffic history strips. */
 function containsTerminalReply(data: string): boolean {
-  return sanitizeTerminalHistoryChunk("", data).strippedText.length > 0;
+  return sanitizeTerminalHistoryChunk("", data).strippedSequences.length > 0;
 }
 
 function legacySafeThreadId(threadId: string): string {
@@ -2103,10 +2109,10 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
             nextEvent.data,
           );
           session.pendingHistoryControlSequence = sanitized.pendingControlSequence;
-          if (sanitized.strippedText.length > 0) {
+          if (sanitized.strippedSequences.length > 0) {
             session.unansweredQueries = appendUnansweredQueries(
               pendingQueries(session, now),
-              sanitized.strippedText,
+              sanitized.strippedSequences,
             );
             session.unansweredQueriesAt = now;
           }
