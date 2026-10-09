@@ -1138,9 +1138,6 @@ function sanitizeTerminalHistoryChunk(pendingControlSequence: string, data: stri
   const append = (value: string) => {
     visibleText += value;
   };
-  const strip = (value: string) => {
-    strippedSequences.push(value);
-  };
   const finish = (pending: string) => ({
     visibleText,
     strippedSequences,
@@ -1164,7 +1161,7 @@ function sanitizeTerminalHistoryChunk(pendingControlSequence: string, data: stri
             const sequence = input.slice(index, cursor + 1);
             const body = input.slice(index + 2, cursor);
             if (shouldStripCsiSequence(body, input[cursor] ?? "")) {
-              strip(sequence);
+              strippedSequences.push(sequence);
             } else {
               append(sequence);
             }
@@ -1195,7 +1192,7 @@ function sanitizeTerminalHistoryChunk(pendingControlSequence: string, data: stri
           (nextCodePoint === 0x5d && shouldStripOscSequence(content)) ||
           (nextCodePoint === 0x50 && shouldStripDcsSequence(content))
         ) {
-          strip(sequence);
+          strippedSequences.push(sequence);
         } else {
           append(sequence);
         }
@@ -1219,7 +1216,7 @@ function sanitizeTerminalHistoryChunk(pendingControlSequence: string, data: stri
           const sequence = input.slice(index, cursor + 1);
           const body = input.slice(index + 1, cursor);
           if (shouldStripCsiSequence(body, input[cursor] ?? "")) {
-            strip(sequence);
+            strippedSequences.push(sequence);
           } else {
             append(sequence);
           }
@@ -1245,7 +1242,7 @@ function sanitizeTerminalHistoryChunk(pendingControlSequence: string, data: stri
         (codePoint === 0x9d && shouldStripOscSequence(content)) ||
         (codePoint === 0x90 && shouldStripDcsSequence(content))
       ) {
-        strip(sequence);
+        strippedSequences.push(sequence);
       } else {
         append(sequence);
       }
@@ -2800,10 +2797,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
   const open: TerminalManager["Service"]["open"] = (input) =>
     withThreadLock(
       input.threadId,
-      resolveLaunchInputEnvironment(input).pipe(
-        Effect.flatMap(openLocked),
-        Effect.map((session) => snapshot(session)),
-      ),
+      resolveLaunchInputEnvironment(input).pipe(Effect.flatMap(openLocked), Effect.map(snapshot)),
     );
 
   const openOrAttachForStream = (input: TerminalAttachInput) =>

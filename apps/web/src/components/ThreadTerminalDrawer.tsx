@@ -129,12 +129,8 @@ export function writeTerminalOutputUpdate(
   answerLive = true,
 ): void {
   if (update.type === "reset") {
-    if (!answerLive) {
-      terminal.resetAndWrite(`${update.data}${update.live}`);
-      return;
-    }
-    terminal.resetAndWrite(update.data);
-    if (update.live.length > 0) terminal.write(update.live);
+    terminal.resetAndWrite(answerLive ? update.data : `${update.data}${update.live}`);
+    if (answerLive && update.live.length > 0) terminal.write(update.live);
   } else if (update.type === "append") {
     terminal.write(update.data);
   }
