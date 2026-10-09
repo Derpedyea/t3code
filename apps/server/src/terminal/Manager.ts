@@ -295,7 +295,7 @@ interface TerminalSessionState {
   pendingHistoryControlSequence: string;
   /** Query traffic stripped from history that no client reply has answered yet. */
   unansweredQueries: string;
-  /** When the latest of `unansweredQueries` arrived. */
+  /** When the oldest of `unansweredQueries` arrived. */
   unansweredQueriesAt: number;
   pendingProcessEvents: Array<PendingProcessEvent>;
   pendingProcessEventIndex: number;
@@ -401,9 +401,15 @@ function snapshot(session: TerminalSessionState): TerminalSessionSnapshot {
   };
 }
 
-/** What an attach replays: the snapshot, then queries its shell may still be waiting on. */
+/**
+ * What an attach replays: the snapshot, then queries its shell may still be waiting
+ * on and the unfinished escape sequence history holds back.
+ */
 function attachState(session: TerminalSessionState, now: number) {
-  return { snapshot: snapshot(session), unansweredQueries: pendingQueries(session, now) };
+  return {
+    snapshot: snapshot(session),
+    replay: `${pendingQueries(session, now)}${session.pendingHistoryControlSequence}`,
+  };
 }
 
 function summary(session: TerminalSessionState): TerminalSummary {
@@ -1063,11 +1069,11 @@ function shouldStripCsiSequence(body: string, finalByte: string): boolean {
   return false;
 }
 
-// DECRQSS ($q) and XTGETTCAP (+q) queries plus their replies ([01]$r / [01]+r):
-// pure request/response traffic with no visual value, and replaying a stored
-// query triggers a fresh reply.
+// DECRQSS ($q) and XTGETTCAP (+q) queries plus their replies ([01]$r / [01]+r),
+// and XTVERSION replies (>|): pure request/response traffic with no visual value,
+// and replaying a stored query triggers a fresh reply.
 function shouldStripDcsSequence(content: string): boolean {
-  return /^[01]?[$+][qr]/.test(content);
+  return /^(?:[01]?[$+][qr]|>\|)/.test(content);
 }
 
 function shouldStripOscSequence(content: string): boolean {
@@ -1119,14 +1125,14 @@ function findEscapeSequenceEndIndex(input: string, start: number): number | null
 
 /**
  * Splits output into replayable history and the query traffic stripped from it.
- * `printedAfterQueries` is whether printable text follows the chunk's last
- * stripped sequence, or appears at all when nothing was stripped.
+ * `printedAt` counts the stripped sequences before the chunk's last printable
+ * text, or is null when it printed none.
  */
 function sanitizeTerminalHistoryChunk(pendingControlSequence: string, data: string) {
   const input = `${pendingControlSequence}${data}`;
   let visibleText = "";
   const strippedSequences: string[] = [];
-  let printedAfterQueries = false;
+  let printedAt: number | null = null;
   let index = 0;
 
   const append = (value: string) => {
@@ -1134,12 +1140,11 @@ function sanitizeTerminalHistoryChunk(pendingControlSequence: string, data: stri
   };
   const strip = (value: string) => {
     strippedSequences.push(value);
-    printedAfterQueries = false;
   };
   const finish = (pending: string) => ({
     visibleText,
     strippedSequences,
-    printedAfterQueries,
+    printedAt,
     pendingControlSequence: pending,
   });
 
@@ -1249,7 +1254,7 @@ function sanitizeTerminalHistoryChunk(pendingControlSequence: string, data: stri
     }
 
     if ((codePoint >= 0x20 && codePoint !== 0x7f && codePoint < 0x80) || codePoint >= 0xa0) {
-      printedAfterQueries = true;
+      printedAt = strippedSequences.length;
     }
     append(input[index] ?? "");
     index += 1;
@@ -1261,7 +1266,7 @@ function sanitizeTerminalHistoryChunk(pendingControlSequence: string, data: stri
 /**
  * Adds one chunk's stripped queries. Past the cap, earlier chunks' queries are
  * dropped and this chunk keeps its newest whole queries that fit, since a shell
- * waits on its latest.
+ * waits on its latest. Those keep the dropped queries' expiry, erring early.
  */
 function appendUnansweredQueries(current: string, queries: ReadonlyArray<string>): string {
   const added = queries.join("");
@@ -2109,16 +2114,16 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
             nextEvent.data,
           );
           session.pendingHistoryControlSequence = sanitized.pendingControlSequence;
-          if (sanitized.strippedSequences.length > 0) {
-            session.unansweredQueries = appendUnansweredQueries(
-              pendingQueries(session, now),
-              sanitized.strippedSequences,
-            );
-            session.unansweredQueriesAt = now;
+          // A program blocked on a reply prints nothing more, so text means whatever
+          // asked before it has moved on.
+          if (sanitized.printedAt !== null) session.unansweredQueries = "";
+          const queries = sanitized.strippedSequences.slice(sanitized.printedAt ?? 0);
+          if (queries.length > 0) {
+            const pending = pendingQueries(session, now);
+            // Expiry runs from the oldest stored query, so newer ones never extend it.
+            if (pending.length === 0) session.unansweredQueriesAt = now;
+            session.unansweredQueries = appendUnansweredQueries(pending, queries);
           }
-          // A program blocked on a reply prints nothing more, so text after a
-          // query means whatever asked has moved on.
-          if (sanitized.printedAfterQueries) session.unansweredQueries = "";
           if (sanitized.visibleText.length > 0) {
             session.history.append(sanitized.visibleText);
           }
@@ -2915,7 +2920,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
         return attachEvent ? listener(attachEvent) : Effect.void;
       });
 
-      const { snapshot: initialSnapshot, unansweredQueries } = yield* initial;
+      const { snapshot: initialSnapshot, replay } = yield* initial;
 
       yield* listener({
         type: "snapshot",
@@ -2923,13 +2928,14 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
       });
 
       // History drops query traffic, but a shell may still be waiting on queries it
-      // printed before any client attached, as fish 4.1+ does on DA1.
-      if (unansweredQueries.length > 0) {
+      // printed before any client attached, as fish 4.1+ does on DA1. It also holds
+      // back an unfinished escape sequence, which later output completes.
+      if (replay.length > 0) {
         yield* listener({
           type: "output",
           threadId: input.threadId,
           terminalId: input.terminalId,
-          data: unansweredQueries,
+          data: replay,
         });
       }
 
@@ -2972,7 +2978,10 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
       withThreadLock(
         input.threadId,
         requireSession(input.threadId, input.terminalId).pipe(
-          Effect.map((session) => ({ snapshot: snapshot(session), unansweredQueries: "" })),
+          Effect.map((session) => ({
+            snapshot: snapshot(session),
+            replay: session.pendingHistoryControlSequence,
+          })),
         ),
       ),
       listener,

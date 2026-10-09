@@ -568,10 +568,10 @@ it.layer(
       yield* manager.write(reply);
       expect(yield* attachOnce(manager)).toEqual(["prompt "]);
 
-      // Text printed after a query means whatever asked stopped waiting.
+      // Text means whatever asked before it stopped waiting, however reads split it.
       yield* print("\u001b[0c");
-      yield* print("gave up\r\n$ ");
-      expect(yield* attachOnce(manager)).toEqual(["prompt gave up\r\n$ "]);
+      yield* print("gave up\r\n$ \u001b[5n");
+      expect(yield* attachOnce(manager)).toEqual(["prompt gave up\r\n$ ", "\u001b[5n"]);
 
       // A restarted shell never sent the old shell's queries.
       yield* print("\u001b[0c");
@@ -591,9 +591,11 @@ it.layer(
       const print = yield* makePrinter(manager, ptyAdapter);
 
       yield* print("prompt \u001b[0c");
-      // A shell waits at most 10 s for a reply.
-      yield* TestClock.adjust("10 seconds");
-      expect(yield* attachOnce(manager)).toEqual(["prompt ", "\u001b[0c"]);
+      // A shell waits at most 10 s for a reply; a newer query doesn't extend that.
+      yield* TestClock.adjust("9 seconds");
+      yield* print("\u001b[5n");
+      yield* TestClock.adjust("1 seconds");
+      expect(yield* attachOnce(manager)).toEqual(["prompt ", "\u001b[0c\u001b[5n"]);
       yield* TestClock.adjust("1 millis");
       expect(yield* attachOnce(manager)).toEqual(["prompt "]);
     }).pipe(Effect.provide(TestClock.layer())),
@@ -624,7 +626,8 @@ it.layer(
           : Effect.void,
       );
       yield* Effect.addFinalizer(() => Effect.sync(stopHolding));
-      ptyAdapter.processes[0]?.emitData("prompt \u001b[0c");
+      // It ends mid-sequence, which history holds back for the next output to finish.
+      ptyAdapter.processes[0]?.emitData("prompt \u001b[0c\u001b[");
       yield* Deferred.await(held);
 
       const events: TerminalAttachStreamEvent[] = [];
@@ -646,7 +649,7 @@ it.layer(
       yield* Deferred.succeed(release, undefined);
       yield* Deferred.await(published);
 
-      expect(attachTranscript(events)).toEqual(["prompt ", "\u001b[0c", "cleared"]);
+      expect(attachTranscript(events)).toEqual(["prompt ", "\u001b[0c\u001b[", "cleared"]);
     }),
   );
 
@@ -1765,8 +1768,9 @@ it.layer(
       process.emitData("prompt ");
       // DECRQM/DECRPM, XTVERSION, and kitty-keyboard CSI query/reply traffic.
       process.emitData("\u001b[?2026$p\u001b[?2026;2$y\u001b[>q\u001b[?u\u001b[?31u");
-      // DECRQSS and XTGETTCAP query/reply traffic in 7-bit DCS form.
+      // DECRQSS and XTGETTCAP query/reply traffic, and an XTVERSION reply, in 7-bit DCS form.
       process.emitData("\u001bP$q m\u001b\\\u001bP1$r0m\u001b\\");
+      process.emitData("\u001bP>|xterm(400)\u001b\\");
       process.emitData("\u001bP+q544e\u001b\\\u001bP1+r544e=1b\u001b\\");
       // The same DCS traffic in 8-bit form.
       process.emitData("\u0090$q m\u009c\u00901$r0m\u009c");
