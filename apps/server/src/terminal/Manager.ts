@@ -1255,14 +1255,16 @@ function sanitizeTerminalHistoryChunk(pendingControlSequence: string, data: stri
   return finish("");
 }
 
-/** Overflow keeps this chunk's newest whole queries, with the original expiry. */
+/** Overflow keeps the newest whole queries across reads, with the original expiry. */
 function appendUnansweredQueries(current: string, queries: ReadonlyArray<string>): string {
   const added = queries.join("");
   if (current.length + added.length <= MAX_UNANSWERED_QUERIES_LENGTH) {
     return `${current}${added}`;
   }
   let kept = "";
-  for (const query of queries.toReversed()) {
+  const retained = sanitizeTerminalHistoryChunk("", current).strippedSequences;
+  for (const query of [...retained, ...queries].toReversed()) {
+    if (query.length > MAX_UNANSWERED_QUERIES_LENGTH) continue;
     if (kept.length + query.length > MAX_UNANSWERED_QUERIES_LENGTH) break;
     kept = `${query}${kept}`;
   }

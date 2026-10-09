@@ -627,9 +627,14 @@ it.layer(
       yield* manager.restart(restartInput());
       expect(yield* attachOnce(manager)).toEqual([""]);
 
-      // Overflow retains the newest whole queries; the final one is DA1.
-      yield* print(`${"\u001b[5n".repeat(1024)}\u001b[0c`, 1);
-      expect(yield* attachOnce(manager)).toEqual(["", `${"\u001b[5n".repeat(1023)}\u001b[0c`]);
+      // Overflow retains whole queries; DA2's extra byte cannot split an older query.
+      yield* print(`${"\u001b[5n".repeat(1024)}\u001b[>0c`, 1);
+      expect(yield* attachOnce(manager)).toEqual(["", `${"\u001b[5n".repeat(1022)}\u001b[>0c`]);
+      // The same traffic in two reads must keep the same whole-sequence suffix.
+      yield* manager.write(reply);
+      yield* print("\u001b[5n".repeat(1023), 1);
+      yield* print("\u001b[5n\u001b[>0c", 1);
+      expect(yield* attachOnce(manager)).toEqual(["", `${"\u001b[5n".repeat(1022)}\u001b[>0c`]);
     }),
   );
 
@@ -646,6 +651,8 @@ it.layer(
       yield* print("prompt \u001b[0c");
       // A shell waits at most 10 s for a reply; a newer query doesn't extend that.
       yield* TestClock.adjust("9 seconds");
+      // An unretainable query cannot evict pending queries or restart their expiry.
+      yield* print(`\u001bP$q${"x".repeat(4096)}\u001b\\`);
       yield* print("\u001b[5n");
       yield* TestClock.adjust("1 seconds");
       expect(yield* attachOnce(manager)).toEqual(["prompt ", "\u001b[0c\u001b[5n"]);
