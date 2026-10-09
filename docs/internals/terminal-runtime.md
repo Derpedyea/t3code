@@ -43,13 +43,7 @@ prompt. The server strips query/response traffic from retained history, and the
 [web renderer](../../apps/web/src/terminal/ghostty/core.ts) detaches its PTY writer
 during replay. Preserve both protections when changing retention or renderer code.
 
-Queries no client has answered yet are the exception. A shell can print startup
-queries before any renderer attaches and then block on the reply (fish waits 10 s
-for DA1). The [server](../../apps/server/src/terminal/Manager.ts) keeps that stripped
-query traffic and sends it right after an attach snapshot, but only while something
-can still be waiting on it: until a client's reply arrives, printable output follows
-the query, or 10 s pass. A snapshot's first
-[renderer](../../apps/web/src/components/ThreadTerminalDrawer.tsx) answers the output
-that arrived after it. A remount of the same retained output replays everything
-muted, because it cannot tell whether whatever asked is still waiting. A fresh
-snapshot after reconnect starts a new replay lifetime.
+Startup queries are separate: the server briefly retains them so a late attach can
+answer. The [web drawer](../../apps/web/src/components/ThreadTerminalDrawer.tsx)
+answers post-snapshot output once per retained-output reset. Remounts replay it
+muted; a fresh reconnect snapshot starts a new lifetime.

@@ -285,56 +285,6 @@ describe("GhosttyTerminalCore snapshots", () => {
     expect({ type: update.type, replies }).toEqual({ type: "append", replies: ["\x1b[0n"] });
   });
 
-  it("answers queries on a snapshot's first render and after reconnect, but not on a remount", async () => {
-    const replies: string[] = [];
-    // A shell's startup query lands after the snapshot but before the WASM loads.
-    let state = createSession("prompt ");
-    state = append(state, "\x1b[5n");
-    const first = await createCore((data) => replies.push(data));
-    writeTerminalOutputUpdate(
-      first,
-      readTerminalOutputUpdate(state.output, INITIAL_TERMINAL_OUTPUT_CURSOR),
-    );
-    expect(replies).toEqual(["\x1b[0n"]);
-
-    // Whatever asked while no renderer was mounted may have stopped waiting, so a
-    // remount replays everything muted.
-    first.dispose();
-    state = append(state, "\x1b[5n");
-    const second = await createCore((data) => replies.push(data));
-    writeTerminalOutputUpdate(
-      second,
-      readTerminalOutputUpdate(state.output, INITIAL_TERMINAL_OUTPUT_CURSOR),
-    );
-    expect(replies).toEqual(["\x1b[0n"]);
-
-    // A fresh snapshot on the same subscription retires its old query output.
-    state = createSession("prompt ", state);
-    state = append(state, "\x1b[5n");
-    const reconnected = await createCore((data) => replies.push(data));
-    writeTerminalOutputUpdate(
-      reconnected,
-      readTerminalOutputUpdate(state.output, INITIAL_TERMINAL_OUTPUT_CURSOR),
-    );
-    expect(replies).toEqual(["\x1b[0n", "\x1b[0n"]);
-  });
-
-  it("claims a snapshot that arrives after the surface's first render", async () => {
-    const replies: string[] = [];
-    const first = await createCore((data) => replies.push(data));
-    let state = nextTerminalAttachSeedState();
-    const seed = readTerminalOutputUpdate(state.output, INITIAL_TERMINAL_OUTPUT_CURSOR);
-    writeTerminalOutputUpdate(first, seed);
-    state = append(createSession("prompt ", state), "\x1b[5n");
-    writeTerminalOutputUpdate(first, readTerminalOutputUpdate(state.output, seed.cursor), true);
-    const second = await createCore((data) => replies.push(data));
-    writeTerminalOutputUpdate(
-      second,
-      readTerminalOutputUpdate(state.output, INITIAL_TERMINAL_OUTPUT_CURSOR),
-    );
-    expect(replies).toEqual(["\x1b[0n"]);
-  });
-
   it("recovers a lagging renderer once from bounded output and resumes appending", async () => {
     const replies: string[] = [];
     const [core, reference] = await Promise.all([
@@ -367,14 +317,23 @@ describe("GhosttyTerminalCore snapshots", () => {
     expect(core.snapshot()).toEqual(reference.snapshot());
   });
 
-  it("replays the latest retained output when WASM arrives after several events", async () => {
-    const pendingCore = createCore();
-    let state = createSession("before");
+  it.each([false, true])("answers startup queries; snapshot late: %s", async (late) => {
+    const replies: string[] = [];
+    const pendingCore = createCore((data) => replies.push(data));
+    let state = nextTerminalAttachSeedState();
+    let cursor = INITIAL_TERMINAL_OUTPUT_CURSOR;
+    if (late) {
+      const seed = readTerminalOutputUpdate(state.output, cursor);
+      writeTerminalOutputUpdate(await pendingCore, seed);
+      cursor = seed.cursor;
+    }
+    state = createSession("before\x1b[5n", state);
     state = append(state, "\r\nduring ");
-    state = append(state, "🙂 load");
+    state = append(state, "🙂 load\x1b[5n");
     const core = await pendingCore;
-    const first = readTerminalOutputUpdate(state.output, INITIAL_TERMINAL_OUTPUT_CURSOR);
-    writeTerminalOutputUpdate(core, first);
+    const first = readTerminalOutputUpdate(state.output, cursor);
+    writeTerminalOutputUpdate(core, first, late ? true : undefined);
+    expect(replies).toEqual(["\x1b[0n"]);
     const reference = await createCore();
     reference.resetAndWrite(terminalOutputText(state.output));
     const reset = vi.spyOn(core, "resetAndWrite");
@@ -386,6 +345,23 @@ describe("GhosttyTerminalCore snapshots", () => {
     reference.write("\r\nafter");
     expect(reset).not.toHaveBeenCalled();
     expect(core.snapshot()).toEqual(reference.snapshot());
+
+    core.dispose();
+    state = append(state, "\x1b[5n");
+    const remounted = await createCore((data) => replies.push(data));
+    writeTerminalOutputUpdate(
+      remounted,
+      readTerminalOutputUpdate(state.output, INITIAL_TERMINAL_OUTPUT_CURSOR),
+    );
+    expect(replies).toEqual(["\x1b[0n"]);
+
+    // A fresh snapshot on the same subscription allows new replies after reconnect.
+    state = append(createSession("before", state), "\x1b[5n");
+    writeTerminalOutputUpdate(
+      remounted,
+      readTerminalOutputUpdate(state.output, INITIAL_TERMINAL_OUTPUT_CURSOR),
+    );
+    expect(replies).toEqual(["\x1b[0n", "\x1b[0n"]);
   });
 
   it("resets real Ghostty for a repeated snapshot, clear, restart, and a fresh attach", async () => {

@@ -401,10 +401,7 @@ function snapshot(session: TerminalSessionState): TerminalSessionSnapshot {
   };
 }
 
-/**
- * What an attach replays: the snapshot, then queries its shell may still be waiting
- * on and the unfinished escape sequence history holds back.
- */
+/** Replays pending queries and an unfinished control sequence after query-free history. */
 function attachState(session: TerminalSessionState, now: number) {
   return {
     snapshot: snapshot(session),
@@ -1123,11 +1120,7 @@ function findEscapeSequenceEndIndex(input: string, start: number): number | null
   return isEscapeFinalByte(input.charCodeAt(cursor)) ? cursor + 1 : start + 1;
 }
 
-/**
- * Splits output into replayable history and the query traffic stripped from it.
- * `printedAt` counts the stripped sequences before the chunk's last printable
- * text, or is null when it printed none.
- */
+/** `printedAt` counts stripped sequences preceding the last printable text, or is null. */
 function sanitizeTerminalHistoryChunk(pendingControlSequence: string, data: string) {
   const input = `${pendingControlSequence}${data}`;
   let visibleText = "";
@@ -1135,34 +1128,80 @@ function sanitizeTerminalHistoryChunk(pendingControlSequence: string, data: stri
   let printedAt: number | null = null;
   let index = 0;
 
-  const finish = (pending: string) => ({
+  const append = (value: string, strip = false) => {
+    if (strip) strippedSequences.push(value);
+    else visibleText += value;
+  };
+  const finish = (pendingControlSequence: string) => ({
     visibleText,
     strippedSequences,
     printedAt,
-    pendingControlSequence: pending,
+    pendingControlSequence,
   });
 
   while (index < input.length) {
     const codePoint = input.charCodeAt(index);
-    // C1 introducers share their ESC form's parser; slices retain the original form.
-    const escaped = codePoint === 0x1b;
-    const kind = escaped ? input.charCodeAt(index + 1) : codePoint - 0x40;
-    const contentStart = index + (escaped ? 2 : 1);
-    if (Number.isNaN(kind)) {
-      return finish(input.slice(index));
+
+    if (codePoint === 0x1b) {
+      const nextCodePoint = input.charCodeAt(index + 1);
+      if (Number.isNaN(nextCodePoint)) {
+        return finish(input.slice(index));
+      }
+
+      if (nextCodePoint === 0x5b) {
+        let cursor = index + 2;
+        while (cursor < input.length) {
+          if (isCsiFinalByte(input.charCodeAt(cursor))) {
+            const sequence = input.slice(index, cursor + 1);
+            const body = input.slice(index + 2, cursor);
+            append(sequence, shouldStripCsiSequence(body, input[cursor] ?? ""));
+            index = cursor + 1;
+            break;
+          }
+          cursor += 1;
+        }
+        if (cursor >= input.length) {
+          return finish(input.slice(index));
+        }
+        continue;
+      }
+
+      if (
+        nextCodePoint === 0x5d ||
+        nextCodePoint === 0x50 ||
+        nextCodePoint === 0x5e ||
+        nextCodePoint === 0x5f
+      ) {
+        const terminatorIndex = findStringTerminatorIndex(input, index + 2);
+        if (terminatorIndex === null) {
+          return finish(input.slice(index));
+        }
+        const sequence = input.slice(index, terminatorIndex);
+        const content = stripStringTerminator(input.slice(index + 2, terminatorIndex));
+        const strip =
+          (nextCodePoint === 0x5d && shouldStripOscSequence(content)) ||
+          (nextCodePoint === 0x50 && shouldStripDcsSequence(content));
+        append(sequence, strip);
+        index = terminatorIndex;
+        continue;
+      }
+
+      const escapeSequenceEndIndex = findEscapeSequenceEndIndex(input, index + 1);
+      if (escapeSequenceEndIndex === null) {
+        return finish(input.slice(index));
+      }
+      append(input.slice(index, escapeSequenceEndIndex));
+      index = escapeSequenceEndIndex;
+      continue;
     }
 
-    if (kind === 0x5b) {
-      let cursor = contentStart;
+    if (codePoint === 0x9b) {
+      let cursor = index + 1;
       while (cursor < input.length) {
         if (isCsiFinalByte(input.charCodeAt(cursor))) {
           const sequence = input.slice(index, cursor + 1);
-          const body = input.slice(contentStart, cursor);
-          if (shouldStripCsiSequence(body, input[cursor] ?? "")) {
-            strippedSequences.push(sequence);
-          } else {
-            visibleText += sequence;
-          }
+          const body = input.slice(index + 1, cursor);
+          append(sequence, shouldStripCsiSequence(body, input[cursor] ?? ""));
           index = cursor + 1;
           break;
         }
@@ -1174,50 +1213,32 @@ function sanitizeTerminalHistoryChunk(pendingControlSequence: string, data: stri
       continue;
     }
 
-    if (kind === 0x5d || kind === 0x50 || kind === 0x5e || kind === 0x5f) {
-      const terminatorIndex = findStringTerminatorIndex(input, contentStart);
+    if (codePoint === 0x9d || codePoint === 0x90 || codePoint === 0x9e || codePoint === 0x9f) {
+      const terminatorIndex = findStringTerminatorIndex(input, index + 1);
       if (terminatorIndex === null) {
         return finish(input.slice(index));
       }
       const sequence = input.slice(index, terminatorIndex);
-      const content = stripStringTerminator(input.slice(contentStart, terminatorIndex));
-      if (
-        (kind === 0x5d && shouldStripOscSequence(content)) ||
-        (kind === 0x50 && shouldStripDcsSequence(content))
-      ) {
-        strippedSequences.push(sequence);
-      } else {
-        visibleText += sequence;
-      }
+      const content = stripStringTerminator(input.slice(index + 1, terminatorIndex));
+      const strip =
+        (codePoint === 0x9d && shouldStripOscSequence(content)) ||
+        (codePoint === 0x90 && shouldStripDcsSequence(content));
+      append(sequence, strip);
       index = terminatorIndex;
-      continue;
-    }
-
-    if (escaped) {
-      const escapeSequenceEndIndex = findEscapeSequenceEndIndex(input, index + 1);
-      if (escapeSequenceEndIndex === null) {
-        return finish(input.slice(index));
-      }
-      visibleText += input.slice(index, escapeSequenceEndIndex);
-      index = escapeSequenceEndIndex;
       continue;
     }
 
     if ((codePoint >= 0x20 && codePoint !== 0x7f && codePoint < 0x80) || codePoint >= 0xa0) {
       printedAt = strippedSequences.length;
     }
-    visibleText += input[index] ?? "";
+    append(input[index] ?? "");
     index += 1;
   }
 
   return finish("");
 }
 
-/**
- * Adds one chunk's stripped queries. Past the cap, earlier chunks' queries are
- * dropped and this chunk keeps its newest whole queries that fit, since a shell
- * waits on its latest. Those keep the dropped queries' expiry, erring early.
- */
+/** Overflow keeps this chunk's newest whole queries, with the original expiry. */
 function appendUnansweredQueries(current: string, queries: ReadonlyArray<string>): string {
   const added = queries.join("");
   if (current.length + added.length <= MAX_UNANSWERED_QUERIES_LENGTH) {
@@ -1236,11 +1257,6 @@ function pendingQueries(session: TerminalSessionState, now: number): string {
   return now - session.unansweredQueriesAt <= UNANSWERED_QUERY_TTL_MS
     ? session.unansweredQueries
     : "";
-}
-
-/** Whether input carries a reply to a terminal query, the traffic history strips. */
-function containsTerminalReply(data: string): boolean {
-  return sanitizeTerminalHistoryChunk("", data).strippedSequences.length > 0;
 }
 
 function legacySafeThreadId(threadId: string): string {
@@ -3031,10 +3047,11 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
     yield* Effect.try({
       try: () => {
         process.write(input.data);
-        // A reply means a client parsed, and so answered, every stored query. Other
-        // input, like a command written before any renderer attached, leaves them.
-        // Cleared in the same step as the write so queries printed after it survive.
-        if (session.unansweredQueries.length > 0 && containsTerminalReply(input.data)) {
+        // Only a successful reply retires queries; ordinary commands leave them pending.
+        if (
+          session.unansweredQueries.length > 0 &&
+          sanitizeTerminalHistoryChunk("", input.data).strippedSequences.length > 0
+        ) {
           session.unansweredQueries = "";
         }
       },
