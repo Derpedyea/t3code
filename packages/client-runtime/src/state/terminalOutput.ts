@@ -9,7 +9,8 @@ export interface TerminalOutputState {
   readonly generation: number;
   readonly chunks: ReadonlyArray<TerminalOutputChunk>;
   readonly retainedBytes: number;
-  readonly resetVersion: number;
+  /** Shared across appends, replaced when retained output is reset. */
+  readonly reset: object;
   /** Where output streamed after the last reset begins; earlier text replays a snapshot. */
   readonly liveOffset: number;
   readonly nextOffset: number;
@@ -17,14 +18,14 @@ export interface TerminalOutputState {
 
 export interface TerminalOutputCursor {
   readonly generation: number;
-  readonly resetVersion: number;
+  readonly reset: object;
   readonly offset: number;
 }
 
 /** Forces the first `readTerminalOutputUpdate` to resynchronize from a reset. */
 export const INITIAL_TERMINAL_OUTPUT_CURSOR = Object.freeze<TerminalOutputCursor>({
   generation: -1,
-  resetVersion: -1,
+  reset: Object.freeze({}),
   offset: 0,
 });
 
@@ -58,7 +59,7 @@ export const EMPTY_TERMINAL_OUTPUT_STATE = Object.freeze<TerminalOutputState>({
   generation: 0,
   chunks: Object.freeze([]),
   retainedBytes: 0,
-  resetVersion: 0,
+  reset: Object.freeze({}),
   liveOffset: 0,
   nextOffset: 0,
 });
@@ -215,7 +216,7 @@ function appendOutput(
       generation: current.generation,
       chunks: [],
       retainedBytes: 0,
-      resetVersion: current.resetVersion + 1,
+      reset: {},
       liveOffset: current.nextOffset + data.length,
       nextOffset: current.nextOffset + data.length,
     };
@@ -262,7 +263,7 @@ function appendOutput(
     generation: current.generation,
     chunks: retainedChunks,
     retainedBytes,
-    resetVersion: current.resetVersion,
+    reset: current.reset,
     liveOffset: current.liveOffset,
     nextOffset: appended.nextOffset,
   };
@@ -283,7 +284,7 @@ function resetOutput(
     generation: current.generation,
     chunks: reset.chunks,
     retainedBytes: reset.byteLength,
-    resetVersion: current.resetVersion + 1,
+    reset: {},
     liveOffset: reset.nextOffset,
     nextOffset: reset.nextOffset,
   };
@@ -299,13 +300,13 @@ export function readTerminalOutputUpdate(
 ): TerminalOutputUpdate {
   const nextCursor = {
     generation: output.generation,
-    resetVersion: output.resetVersion,
+    reset: output.reset,
     offset: output.nextOffset,
   };
   const firstOffset = output.chunks[0]?.startOffset ?? output.nextOffset;
   if (
     cursor.generation !== output.generation ||
-    cursor.resetVersion !== output.resetVersion ||
+    cursor.reset !== output.reset ||
     cursor.offset < firstOffset
   ) {
     const text = terminalOutputText(output);

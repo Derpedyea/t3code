@@ -48,7 +48,8 @@ queries before any renderer attaches and then block on the reply (fish waits 10 
 for DA1). The [server](../../apps/server/src/terminal/Manager.ts) keeps that stripped
 query traffic and sends it right after an attach snapshot, but only while something
 can still be waiting on it: until a client's reply arrives, printable output follows
-the query, or 10 s pass. A stream's first
+the query, or 10 s pass. A snapshot's first
 [renderer](../../apps/web/src/components/ThreadTerminalDrawer.tsx) answers the output
-that arrived after its snapshot. A remount replays everything muted, because it
-cannot tell whether whatever asked is still waiting.
+that arrived after it. A remount of the same retained output replays everything
+muted, because it cannot tell whether whatever asked is still waiting. A fresh
+snapshot after reconnect starts a new replay lifetime.

@@ -573,6 +573,10 @@ it.layer(
       yield* print("gave up\r\n$ \u001b[5n");
       expect(yield* attachOnce(manager)).toEqual(["prompt gave up\r\n$ ", "\u001b[5n"]);
 
+      // Clearing history does not answer a query the shell is still waiting on.
+      yield* manager.clear({ threadId: "thread-1", terminalId: DEFAULT_TERMINAL_ID });
+      expect(yield* attachOnce(manager)).toEqual(["", "\u001b[5n"]);
+
       // A restarted shell never sent the old shell's queries.
       yield* print("\u001b[0c");
       yield* manager.restart(restartInput());
@@ -1805,11 +1809,22 @@ it.layer(
       process.emitData("1uafter ");
       process.emitData("\u0090+q544e");
       process.emitData("\u009cafter\n");
+      process.emitData("\u009d11;");
+      process.emitData("?\u001b");
+      process.emitData("\\");
+      // APC/PM payloads are opaque even when they contain query-shaped bytes.
+      const opaque = ["\u001b_", "\u009f", "\u001b^", "\u009e"].map(
+        (prefix) => `${prefix}\u001b[0c\u001b\\`,
+      );
+      for (const sequence of opaque) {
+        process.emitData(sequence.slice(0, -1));
+        process.emitData("\\");
+      }
 
       yield* manager.close({ threadId: "thread-1" });
 
       const reopened = yield* manager.open(openInput());
-      assert.equal(reopened.history, "before after after after after\n");
+      assert.equal(reopened.history, `before after after after after\n${opaque.join("")}`);
     }),
   );
 

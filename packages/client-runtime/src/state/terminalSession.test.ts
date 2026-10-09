@@ -428,7 +428,7 @@ describe("terminal session reducers", () => {
     expect(state.lifecycleVersion).toBe(2);
   });
 
-  it("does not reuse a renderer cursor when a fresh attach has matching counters", () => {
+  it("does not reuse a renderer cursor when a fresh attach has matching offsets", () => {
     const first = applyTerminalAttachStreamEvent(nextTerminalAttachSeedState(), {
       type: "snapshot",
       snapshot: BASE_SNAPSHOT,
@@ -438,7 +438,6 @@ describe("terminal session reducers", () => {
       type: "snapshot",
       snapshot: { ...BASE_SNAPSHOT, history: "other" },
     });
-    expect(next.output.resetVersion).toBe(first.output.resetVersion);
     expect(next.output.nextOffset).toBe(first.output.nextOffset);
     expect(readTerminalOutputUpdate(next.output, cursor)).toMatchObject({
       type: "reset",

@@ -1135,9 +1135,6 @@ function sanitizeTerminalHistoryChunk(pendingControlSequence: string, data: stri
   let printedAt: number | null = null;
   let index = 0;
 
-  const append = (value: string) => {
-    visibleText += value;
-  };
   const finish = (pending: string) => ({
     visibleText,
     strippedSequences,
@@ -1147,78 +1144,24 @@ function sanitizeTerminalHistoryChunk(pendingControlSequence: string, data: stri
 
   while (index < input.length) {
     const codePoint = input.charCodeAt(index);
-
-    if (codePoint === 0x1b) {
-      const nextCodePoint = input.charCodeAt(index + 1);
-      if (Number.isNaN(nextCodePoint)) {
-        return finish(input.slice(index));
-      }
-
-      if (nextCodePoint === 0x5b) {
-        let cursor = index + 2;
-        while (cursor < input.length) {
-          if (isCsiFinalByte(input.charCodeAt(cursor))) {
-            const sequence = input.slice(index, cursor + 1);
-            const body = input.slice(index + 2, cursor);
-            if (shouldStripCsiSequence(body, input[cursor] ?? "")) {
-              strippedSequences.push(sequence);
-            } else {
-              append(sequence);
-            }
-            index = cursor + 1;
-            break;
-          }
-          cursor += 1;
-        }
-        if (cursor >= input.length) {
-          return finish(input.slice(index));
-        }
-        continue;
-      }
-
-      if (
-        nextCodePoint === 0x5d ||
-        nextCodePoint === 0x50 ||
-        nextCodePoint === 0x5e ||
-        nextCodePoint === 0x5f
-      ) {
-        const terminatorIndex = findStringTerminatorIndex(input, index + 2);
-        if (terminatorIndex === null) {
-          return finish(input.slice(index));
-        }
-        const sequence = input.slice(index, terminatorIndex);
-        const content = stripStringTerminator(input.slice(index + 2, terminatorIndex));
-        if (
-          (nextCodePoint === 0x5d && shouldStripOscSequence(content)) ||
-          (nextCodePoint === 0x50 && shouldStripDcsSequence(content))
-        ) {
-          strippedSequences.push(sequence);
-        } else {
-          append(sequence);
-        }
-        index = terminatorIndex;
-        continue;
-      }
-
-      const escapeSequenceEndIndex = findEscapeSequenceEndIndex(input, index + 1);
-      if (escapeSequenceEndIndex === null) {
-        return finish(input.slice(index));
-      }
-      append(input.slice(index, escapeSequenceEndIndex));
-      index = escapeSequenceEndIndex;
-      continue;
+    // C1 introducers share their ESC form's parser; slices retain the original form.
+    const escaped = codePoint === 0x1b;
+    const kind = escaped ? input.charCodeAt(index + 1) : codePoint - 0x40;
+    const contentStart = index + (escaped ? 2 : 1);
+    if (Number.isNaN(kind)) {
+      return finish(input.slice(index));
     }
 
-    if (codePoint === 0x9b) {
-      let cursor = index + 1;
+    if (kind === 0x5b) {
+      let cursor = contentStart;
       while (cursor < input.length) {
         if (isCsiFinalByte(input.charCodeAt(cursor))) {
           const sequence = input.slice(index, cursor + 1);
-          const body = input.slice(index + 1, cursor);
+          const body = input.slice(contentStart, cursor);
           if (shouldStripCsiSequence(body, input[cursor] ?? "")) {
             strippedSequences.push(sequence);
           } else {
-            append(sequence);
+            visibleText += sequence;
           }
           index = cursor + 1;
           break;
@@ -1231,29 +1174,39 @@ function sanitizeTerminalHistoryChunk(pendingControlSequence: string, data: stri
       continue;
     }
 
-    if (codePoint === 0x9d || codePoint === 0x90 || codePoint === 0x9e || codePoint === 0x9f) {
-      const terminatorIndex = findStringTerminatorIndex(input, index + 1);
+    if (kind === 0x5d || kind === 0x50 || kind === 0x5e || kind === 0x5f) {
+      const terminatorIndex = findStringTerminatorIndex(input, contentStart);
       if (terminatorIndex === null) {
         return finish(input.slice(index));
       }
       const sequence = input.slice(index, terminatorIndex);
-      const content = stripStringTerminator(input.slice(index + 1, terminatorIndex));
+      const content = stripStringTerminator(input.slice(contentStart, terminatorIndex));
       if (
-        (codePoint === 0x9d && shouldStripOscSequence(content)) ||
-        (codePoint === 0x90 && shouldStripDcsSequence(content))
+        (kind === 0x5d && shouldStripOscSequence(content)) ||
+        (kind === 0x50 && shouldStripDcsSequence(content))
       ) {
         strippedSequences.push(sequence);
       } else {
-        append(sequence);
+        visibleText += sequence;
       }
       index = terminatorIndex;
+      continue;
+    }
+
+    if (escaped) {
+      const escapeSequenceEndIndex = findEscapeSequenceEndIndex(input, index + 1);
+      if (escapeSequenceEndIndex === null) {
+        return finish(input.slice(index));
+      }
+      visibleText += input.slice(index, escapeSequenceEndIndex);
+      index = escapeSequenceEndIndex;
       continue;
     }
 
     if ((codePoint >= 0x20 && codePoint !== 0x7f && codePoint < 0x80) || codePoint >= 0xa0) {
       printedAt = strippedSequences.length;
     }
-    append(input[index] ?? "");
+    visibleText += input[index] ?? "";
     index += 1;
   }
 
@@ -3122,7 +3075,6 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
         const session = yield* requireSession(input.threadId, terminalId);
         session.history.clear();
         session.pendingHistoryControlSequence = "";
-        session.unansweredQueries = "";
         session.pendingProcessEvents = [];
         session.pendingProcessEventIndex = 0;
         session.processEventDrainRunning = false;

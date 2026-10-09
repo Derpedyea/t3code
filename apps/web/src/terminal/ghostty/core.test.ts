@@ -77,8 +77,8 @@ describe("GhosttyTerminalCore snapshots", () => {
     return core;
   }
 
-  function createSession(history: string) {
-    return applyTerminalAttachStreamEvent(nextTerminalAttachSeedState(), {
+  function createSession(history: string, current = nextTerminalAttachSeedState()) {
+    return applyTerminalAttachStreamEvent(current, {
       type: "snapshot",
       snapshot: {
         threadId: "terminal-stream-test",
@@ -285,7 +285,7 @@ describe("GhosttyTerminalCore snapshots", () => {
     expect({ type: update.type, replies }).toEqual({ type: "append", replies: ["\x1b[0n"] });
   });
 
-  it("answers queries that streamed in before a stream's first render, and none on a remount", async () => {
+  it("answers queries on a snapshot's first render and after reconnect, but not on a remount", async () => {
     const replies: string[] = [];
     // A shell's startup query lands after the snapshot but before the WASM loads.
     let state = createSession("prompt ");
@@ -305,25 +305,56 @@ describe("GhosttyTerminalCore snapshots", () => {
     writeTerminalOutputUpdate(
       second,
       readTerminalOutputUpdate(state.output, INITIAL_TERMINAL_OUTPUT_CURSOR),
-      false,
+    );
+    expect(replies).toEqual(["\x1b[0n"]);
+
+    // A fresh snapshot on the same subscription retires its old query output.
+    state = createSession("prompt ", state);
+    state = append(state, "\x1b[5n");
+    const reconnected = await createCore((data) => replies.push(data));
+    writeTerminalOutputUpdate(
+      reconnected,
+      readTerminalOutputUpdate(state.output, INITIAL_TERMINAL_OUTPUT_CURSOR),
+    );
+    expect(replies).toEqual(["\x1b[0n", "\x1b[0n"]);
+  });
+
+  it("claims a snapshot that arrives after the surface's first render", async () => {
+    const replies: string[] = [];
+    const first = await createCore((data) => replies.push(data));
+    let state = nextTerminalAttachSeedState();
+    const seed = readTerminalOutputUpdate(state.output, INITIAL_TERMINAL_OUTPUT_CURSOR);
+    writeTerminalOutputUpdate(first, seed);
+    state = append(createSession("prompt ", state), "\x1b[5n");
+    writeTerminalOutputUpdate(first, readTerminalOutputUpdate(state.output, seed.cursor), true);
+    const second = await createCore((data) => replies.push(data));
+    writeTerminalOutputUpdate(
+      second,
+      readTerminalOutputUpdate(state.output, INITIAL_TERMINAL_OUTPUT_CURSOR),
     );
     expect(replies).toEqual(["\x1b[0n"]);
   });
 
   it("recovers a lagging renderer once from bounded output and resumes appending", async () => {
-    const [core, reference] = await Promise.all([createCore(), createCore()]);
+    const replies: string[] = [];
+    const [core, reference] = await Promise.all([
+      createCore((data) => replies.push(data)),
+      createCore(),
+    ]);
     let state = createSession("\x1b[31mold");
     const initial = readTerminalOutputUpdate(state.output, INITIAL_TERMINAL_OUTPUT_CURSOR);
     writeTerminalOutputUpdate(core, initial);
     const reset = vi.spyOn(core, "resetAndWrite");
     const data = "line\r\n".repeat(8192);
     for (let index = 0; index < 16; index += 1) state = append(state, data);
+    state = append(state, "\x1b[5n");
 
     const recovery = readTerminalOutputUpdate(state.output, initial.cursor);
     if (recovery.type !== "reset") throw new Error(`Expected reset, received ${recovery.type}`);
     const retained = `${recovery.data}${recovery.live}`;
     expect(new TextEncoder().encode(retained).byteLength).toBe(DEFAULT_MAX_TERMINAL_BUFFER_BYTES);
-    writeTerminalOutputUpdate(core, recovery);
+    writeTerminalOutputUpdate(core, recovery, true);
+    expect(replies).toEqual(["\x1b[0n"]);
     reference.resetAndWrite(retained);
     expect(core.snapshot()).toEqual(reference.snapshot());
 
