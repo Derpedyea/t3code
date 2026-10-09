@@ -1077,6 +1077,23 @@ function shouldStripOscSequence(content: string): boolean {
   return /^(10|11|12);(?:\?|rgb:)/.test(content);
 }
 
+/** History removes both requests and replies; only complete replies retire queries. */
+// oxlint-disable no-control-regex -- Replies intentionally match terminal control bytes.
+function isTerminalReplySequence(sequence: string): boolean {
+  return (
+    // DSR/CPR (including color scheme), DA1/DA2, DECRPM and kitty keyboard flags.
+    /^(?:\u001b\[|\u009b)(?:[0-4]?n|\?(?:10|11|13|20|21|27|50|53|57|58|70|71|73|83)(?:;[0-9]+)*n|\?997;[12]n|\??[0-9]+;[0-9]+(?:;[0-9]+)?R|\?[0-9]+(?:;[0-9]+)*c|>[0-9]+;[0-9]+;[0-9]+c|\??[0-9]+;[0-4]\$y|\?[0-9]+u)$/.test(
+      sequence,
+    ) ||
+    // DECRQSS/XTGETTCAP and XTVERSION replies require ST; OSC colors also allow BEL.
+    /^(?:\u001bP|\u0090)(?:[01][$+]r|>\|)[\s\S]*(?:\u001b\\|\u009c)$/.test(sequence) ||
+    /^(?:\u001b\]|\u009d)(?:10|11|12);rgb:[0-9a-f]{1,4}\/[0-9a-f]{1,4}\/[0-9a-f]{1,4}(?:\u0007|\u001b\\|\u009c)$/i.test(
+      sequence,
+    )
+  );
+}
+// oxlint-enable no-control-regex
+
 function stripStringTerminator(value: string): string {
   if (value.endsWith("\u001b\\")) {
     return value.slice(0, -2);
@@ -3050,7 +3067,9 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
         // Only a successful reply retires queries; ordinary commands leave them pending.
         if (
           session.unansweredQueries.length > 0 &&
-          sanitizeTerminalHistoryChunk("", input.data).strippedSequences.length > 0
+          sanitizeTerminalHistoryChunk("", input.data).strippedSequences.some(
+            isTerminalReplySequence,
+          )
         ) {
           session.unansweredQueries = "";
         }

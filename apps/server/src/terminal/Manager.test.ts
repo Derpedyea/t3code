@@ -580,6 +580,39 @@ it.layer(
       yield* manager.write(reply);
       expect(yield* attachOnce(manager)).toEqual(["prompt "]);
 
+      // History strips both requests and replies; only replies answer pending queries.
+      for (const [request, response] of [
+        ["\u001b[5n", "\u001b[0n"],
+        ["\u001b[6n", "\u001b[1;2R"],
+        ["\u001b[?6n", "\u001b[?1;2;1R"],
+        ["\u001b[?15n", "\u001b[?11n"],
+        ["\u001b[?996n", "\u001b[?997;1n"],
+        ["\u001b[0c", "\u001b[?62;22c"],
+        ["\u001b[>0c", "\u001b[>1;10;0c"],
+        ["\u001b[?2026$p", "\u001b[?2026;2$y"],
+        ["\u001b[?u", "\u001b[?1u"],
+        ["\u001b[>q", "\u001bP>|ghostty 1.3.0\u001b\\"],
+        ["\u001bP$qm\u001b\\", "\u001bP1$r0m\u001b\\"],
+        ["\u001bP+q544e\u001b\\", "\u001bP0+r\u001b\\"],
+        ["\u001b]10;?\u0007", "\u001b]10;rgb:ffff/ffff/ffff\u0007"],
+        ["\u009b5n", "\u009b0n"],
+        ["\u0090$qm\u009c", "\u00901$r0m\u009c"],
+        ["\u009d11;?\u009c", "\u009d11;rgb:0000/0000/0000\u009c"],
+        ["\u001bP1$r0m\u0007", "\u001bP1$r0m\u001b\\"],
+        ["\u001b]12;rgb:invalid\u0007", "\u001b]12;rgb:ffff/0000/0000\u001b\\"],
+        ["\u001b_\u001b[0n\u001b\\", "\u001b[4n"],
+        ["\u001b[0", "\u001b[n"],
+      ] as const) {
+        yield* print("\u001b[0c");
+        yield* manager.write({ ...reply, data: request });
+        expect(yield* attachOnce(manager), JSON.stringify(request)).toEqual([
+          "prompt ",
+          "\u001b[0c",
+        ]);
+        yield* manager.write({ ...reply, data: response });
+        expect(yield* attachOnce(manager), JSON.stringify(response)).toEqual(["prompt "]);
+      }
+
       // Text means whatever asked before it stopped waiting, however reads split it.
       yield* print("\u001b[0c");
       yield* print("gave up\r\n$ \u001b[5n");
