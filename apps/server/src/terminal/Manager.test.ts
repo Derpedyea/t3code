@@ -511,13 +511,28 @@ it.layer(
       expect(shell.writes).toEqual(["\u001b[?62;22c\u001b[?62;22c"]);
 
       // A writable attach renders live output, so its renderer answers instead,
-      // including after its terminal id is closed and reopened.
+      // including after its terminal id is closed and reopened. A query split around
+      // its snapshot still reaches it whole: the snapshot holds back the unfinished
+      // start, which the stream replays before the rest arrives live.
+      yield* print("\u001b[0");
       const attached: TerminalAttachStreamEvent[] = [];
       const detach = yield* manager.attachStream(openInput(), (event) =>
         Effect.sync(() => attached.push(event)),
       );
-      yield* print("\u001b[c");
-      expect(attached.at(-1)).toMatchObject({ type: "output", data: "\u001b[c" });
+      yield* print("c");
+      expect(attached.flatMap((event) => (event.type === "output" ? [event.data] : []))).toEqual([
+        "\u001b[0",
+        "c",
+      ]);
+      // The replay is capped; its introducer keeps an oversized payload opaque.
+      const longOsc = `\u001b]10;${"a".repeat(5_000)}`;
+      yield* print(longOsc);
+      const later: TerminalAttachStreamEvent[] = [];
+      const detachLater = yield* manager.attachStream(openInput(), (event) =>
+        Effect.sync(() => later.push(event)),
+      );
+      detachLater();
+      expect(later.at(-1)).toMatchObject({ type: "output", data: longOsc.slice(0, 4096) });
       yield* manager.close({ threadId: "thread-1", terminalId: DEFAULT_TERMINAL_ID });
       yield* manager.open(openInput());
       const reopened = ptyAdapter.processes[1]!;

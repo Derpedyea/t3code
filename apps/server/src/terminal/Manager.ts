@@ -98,6 +98,8 @@ export {
 const DEFAULT_HISTORY_LINE_LIMIT = 5_000;
 const DEFAULT_HISTORY_BYTE_LIMIT = 8 * 1024 * 1024;
 const MAX_HISTORY_CHUNK_LENGTH = 16 * 1024;
+/** Bounds the unfinished sequence an attach replays; its introducer keeps the rest opaque. */
+const MAX_UNFINISHED_SEQUENCE_REPLAY = 4096;
 const DEFAULT_PERSIST_DEBOUNCE_MS = 250;
 const DEFAULT_SUBPROCESS_POLL_INTERVAL_MS = 1_000;
 const MAX_SUBPROCESS_POLL_INTERVAL_MS = 60_000;
@@ -1617,6 +1619,9 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
     answeringAttaches.set(key, (answeringAttaches.get(key) ?? 0) + 1);
     return {
       snapshot: snapshot(session),
+      // History holds back an unfinished sequence. Replaying it after the snapshot
+      // lets the renderer complete a query whose final bytes arrive live.
+      unfinished: session.pendingHistoryControlSequence.slice(0, MAX_UNFINISHED_SEQUENCE_REPLAY),
       release: () => {
         const count = (answeringAttaches.get(key) ?? 1) - 1;
         if (count > 0) answeringAttaches.set(key, count);
@@ -2893,7 +2898,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
         return attachEvent ? listener(attachEvent) : Effect.void;
       });
 
-      const { snapshot: initialSnapshot, release } = yield* initial;
+      const { snapshot: initialSnapshot, unfinished, release } = yield* initial;
       const unsubscribeEvents = unsubscribe;
       unsubscribe = () => {
         unsubscribeEvents?.();
@@ -2904,6 +2909,14 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
         type: "snapshot",
         snapshot: initialSnapshot,
       });
+      if (unfinished.length > 0) {
+        yield* listener({
+          type: "output",
+          threadId: input.threadId,
+          terminalId: input.terminalId,
+          data: unfinished,
+        });
+      }
 
       for (const event of bufferedEvents) {
         if (isDuplicateAttachSnapshotEvent(event, initialSnapshot)) {
@@ -2944,7 +2957,11 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
         input.threadId,
         // Observers can't write, so they never answer for the shell.
         requireSession(input.threadId, input.terminalId).pipe(
-          Effect.map((session) => ({ snapshot: snapshot(session), release: () => {} })),
+          Effect.map((session) => ({
+            snapshot: snapshot(session),
+            unfinished: "",
+            release: () => {},
+          })),
         ),
       ),
       listener,
