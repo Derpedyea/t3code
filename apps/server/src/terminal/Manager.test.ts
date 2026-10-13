@@ -199,6 +199,45 @@ function restartInput(overrides: Partial<TerminalRestartInput> = {}): TerminalRe
   };
 }
 
+/** What an attach stream showed: snapshot history, output data, or else the event type. */
+function attachTranscript(events: ReadonlyArray<TerminalAttachStreamEvent>) {
+  return events.map((event) =>
+    event.type === "snapshot"
+      ? event.snapshot.history
+      : event.type === "output"
+        ? event.data
+        : event.type,
+  );
+}
+
+/** Emits shell output and waits until the manager has published it. */
+const makePrinter = Effect.fnUntraced(function* (
+  manager: TerminalManager.TerminalManager["Service"],
+  ptyAdapter: FakePtyAdapter,
+) {
+  const printed = yield* Queue.unbounded<void>();
+  const unsubscribe = yield* manager.subscribe((event) =>
+    event.type === "output" ? Queue.offer(printed, undefined).pipe(Effect.asVoid) : Effect.void,
+  );
+  yield* Effect.addFinalizer(() => Effect.sync(unsubscribe));
+  return (data: string, shellIndex = 0) =>
+    Effect.sync(() => ptyAdapter.processes[shellIndex]?.emitData(data)).pipe(
+      Effect.andThen(Queue.take(printed)),
+    );
+});
+
+/** Attaches, detaches once the stream is live, and returns what it showed. */
+const attachOnce = Effect.fnUntraced(function* (
+  manager: TerminalManager.TerminalManager["Service"],
+) {
+  const events: TerminalAttachStreamEvent[] = [];
+  const detach = yield* manager.attachStream(openInput(), (event) =>
+    Effect.sync(() => events.push(event)),
+  );
+  detach();
+  return attachTranscript(events);
+});
+
 const historyLogPath = (logsDir: string, threadId = "thread-1") =>
   Effect.service(Path.Path).pipe(
     Effect.map(({ join }) => join(logsDir, `terminal_${Base64Url.encode(threadId)}.log`)),
@@ -467,11 +506,27 @@ it.layer(
   it.effect("keeps attach streams live when a terminal id is closed and reopened", () =>
     Effect.gen(function* () {
       const { manager, ptyAdapter } = yield* createManager();
+      yield* manager.open(openInput());
+      const print = yield* makePrinter(manager, ptyAdapter);
+      // Raise the old process's sequence above a reopened process's initial value.
+      for (const data of ["a", "b", "c"]) yield* print(data);
+      const snapshotted = yield* Deferred.make<void>();
+      const release = yield* Deferred.make<void>();
       const attachEvents = yield* Ref.make<ReadonlyArray<TerminalAttachStreamEvent>>([]);
-      const unsubscribe = yield* manager.attachStream(openInput(), (event) =>
-        Ref.update(attachEvents, (events) => [...events, event]),
-      );
-      yield* Effect.addFinalizer(() => Effect.sync(unsubscribe));
+      const attaching = yield* manager
+        .attachStream(openInput(), (event) =>
+          Ref.update(attachEvents, (events) => [...events, event]).pipe(
+            Effect.andThen(
+              event.type === "snapshot" && event.snapshot.history === "abc"
+                ? Deferred.succeed(snapshotted, undefined).pipe(
+                    Effect.andThen(Deferred.await(release)),
+                  )
+                : Effect.void,
+            ),
+          ),
+        )
+        .pipe(Effect.forkScoped);
+      yield* Deferred.await(snapshotted);
 
       yield* manager.close({
         threadId: "thread-1",
@@ -479,13 +534,260 @@ it.layer(
         deleteHistory: true,
       });
       yield* manager.open(openInput());
+      yield* print("new", 1);
+      yield* Deferred.succeed(release, undefined);
+      const unsubscribe = yield* Fiber.join(attaching);
+      yield* Effect.addFinalizer(() => Effect.sync(unsubscribe));
+      yield* print("live", 1);
 
       const events = yield* Ref.get(attachEvents);
-      expect(events.map((event) => event.type)).toEqual(["snapshot", "closed", "snapshot"]);
+      expect(attachTranscript(events)).toEqual(["abc", "closed", "", "new", "live"]);
       expect(
         events.filter((event) => event.type === "snapshot").map((event) => event.snapshot.status),
       ).toEqual(["running", "running"]);
+      // Sequences never repeat or go backwards across the close and reopen.
+      const sequences = events.flatMap((event) => {
+        const sequence =
+          event.type === "snapshot"
+            ? event.snapshot.sequence
+            : event.type === "closed"
+              ? event.sequence
+              : undefined;
+        return sequence === undefined ? [] : [sequence];
+      });
+      expect(sequences).toEqual([...new Set(sequences)].sort((a, b) => a - b));
       expect(ptyAdapter.spawnInputs).toHaveLength(2);
+    }),
+  );
+
+  it.effect("forwards unanswered terminal queries to later attaches until answered", () =>
+    Effect.gen(function* () {
+      const { manager, ptyAdapter } = yield* createManager();
+      yield* manager.open(openInput());
+      const print = yield* makePrinter(manager, ptyAdapter);
+      const shell = ptyAdapter.processes[0]!;
+      const reply = {
+        threadId: "thread-1",
+        terminalId: DEFAULT_TERMINAL_ID,
+        data: "\u001b[?62;22c",
+      };
+
+      // A shell prints startup queries before any client attaches (fish blocks on DA1).
+      yield* print("prompt \u001b[0c");
+      expect(yield* attachOnce(manager)).toEqual(["prompt ", "\u001b[0c"]);
+
+      // A reply that never reached the shell, or input that is not a reply, leaves
+      // them pending.
+      shell.writeFailure = new Error("PTY input handle is unavailable");
+      yield* Effect.flip(manager.write(reply));
+      shell.writeFailure = undefined;
+      yield* manager.write({ ...reply, data: "ls\r" });
+      expect(yield* attachOnce(manager)).toEqual(["prompt ", "\u001b[0c"]);
+
+      yield* manager.write(reply);
+      expect(yield* attachOnce(manager)).toEqual(["prompt "]);
+
+      // Queries, other reply families, and incomplete input do not answer DA1.
+      for (const data of ["\u001b[c", "\u001b[5n", "\u001b[0n", "\u001b[?62;22"]) {
+        yield* print("\u001b[0c");
+        yield* manager.write({ ...reply, data });
+        expect(yield* attachOnce(manager)).toEqual(["prompt ", "\u001b[0c"]);
+        yield* manager.write(reply);
+      }
+
+      // Output after a query doesn't retire it; only a reply or the expiry does.
+      yield* print("\u001b[0c");
+      yield* print("working\r\n$ \u001b[5n");
+      expect(yield* attachOnce(manager)).toEqual(["prompt working\r\n$ ", "\u001b[0c"]);
+
+      // Clearing history does not answer a query the shell is still waiting on.
+      yield* manager.clear({ threadId: "thread-1", terminalId: DEFAULT_TERMINAL_ID });
+      expect(yield* attachOnce(manager)).toEqual(["", "\u001b[0c"]);
+
+      // A restarted shell never sent the old shell's queries.
+      yield* print("\u001b[0c");
+      yield* manager.restart(restartInput());
+      expect(yield* attachOnce(manager)).toEqual([""]);
+
+      // A flood read over the cap is dropped whole; the next query is retained.
+      yield* print(`${"\u001b[0c".repeat(1024)}\u001b[c`, 1);
+      expect(yield* attachOnce(manager)).toEqual([""]);
+      yield* print("\u001b[0c".repeat(1024), 1);
+      expect(yield* attachOnce(manager)).toEqual(["", "\u001b[0c".repeat(1024)]);
+      yield* print("\u001b[c", 1);
+      expect(yield* attachOnce(manager)).toEqual(["", "\u001b[c"]);
+      const oversizedPrefix = `\u001b]10;${"a".repeat(600_000)}`;
+      yield* print(oversizedPrefix, 1);
+      expect(yield* attachOnce(manager)).toEqual(["", `\u001b[c${oversizedPrefix.slice(0, 4096)}`]);
+    }),
+  );
+
+  it.effect("retires only the oldest DA1 request for each complete reply", () =>
+    Effect.gen(function* () {
+      const { manager, ptyAdapter } = yield* createManager();
+      yield* manager.open(openInput());
+      const print = yield* makePrinter(manager, ptyAdapter);
+      const write = (data: string) =>
+        manager.write({ threadId: "thread-1", terminalId: DEFAULT_TERMINAL_ID, data });
+      // Stateful queries stay stripped: replaying CPR after AB would report column 3, not 2.
+      yield* print("A\u001b[6nB\u001b[?2026$p\u001b[0c\u001b[c");
+      // Complete/unfinished DCS payloads and unrelated replies cannot acknowledge DA1.
+      yield* write("\u001bP+q\u001b[?62;22c\u001b\\\u001bP$q\u001b[?62;22c");
+      yield* write("\u001b[0n");
+      expect(yield* attachOnce(manager)).toEqual(["AB", "\u001b[0c\u001b[c"]);
+      yield* write("\u001b[?62;22c");
+      expect(yield* attachOnce(manager)).toEqual(["AB", "\u001b[c"]);
+      yield* write("\u001b[?62;22c");
+      expect(yield* attachOnce(manager)).toEqual(["AB"]);
+    }),
+  );
+
+  it.effect.each(["reply", "expiry", "replacement"] as const)(
+    "revalidates captured replay after a suspended snapshot: %s",
+    (change) =>
+      Effect.gen(function* () {
+        const { manager, ptyAdapter } = yield* createManager();
+        yield* manager.open(openInput());
+        yield* Effect.addFinalizer(() =>
+          Effect.sync(() => ptyAdapter.processes.at(-1)?.emitExit({ exitCode: 0, signal: 0 })),
+        );
+        const print = yield* makePrinter(manager, ptyAdapter);
+        yield* print("prompt \u001b[0c");
+        const held = yield* Deferred.make<void>();
+        const release = yield* Deferred.make<void>();
+        const events: TerminalAttachStreamEvent[] = [];
+        const attaching = yield* manager
+          .attachStream(openInput(), (event) => {
+            events.push(event);
+            return event.type === "snapshot"
+              ? Deferred.succeed(held, undefined).pipe(Effect.andThen(Deferred.await(release)))
+              : Effect.void;
+          })
+          .pipe(Effect.forkScoped);
+        yield* Deferred.await(held);
+        if (change === "reply") {
+          yield* manager.write({
+            threadId: "thread-1",
+            terminalId: DEFAULT_TERMINAL_ID,
+            data: "\u001b[?62;22c",
+          });
+        } else if (change === "expiry") {
+          yield* TestClock.adjust("10001 millis");
+        } else {
+          const exited = yield* Deferred.make<void>();
+          const stopWatching = yield* manager.subscribe((event) =>
+            event.type === "exited"
+              ? Deferred.succeed(exited, undefined).pipe(Effect.asVoid)
+              : Effect.void,
+          );
+          ptyAdapter.processes[0]!.emitExit({ exitCode: 0, signal: 0 });
+          yield* Deferred.await(exited);
+          stopWatching();
+          yield* manager.restart(restartInput());
+        }
+        yield* Deferred.succeed(release, undefined);
+        const detach = yield* Fiber.join(attaching);
+        detach();
+        expect(events.filter((event) => event.type === "output")).toEqual([]);
+      }).pipe(Effect.provide(change === "expiry" ? TestClock.layer() : Layer.empty)),
+  );
+
+  it.effect("stops forwarding queries nothing can still be waiting on", () =>
+    Effect.gen(function* () {
+      const { manager, ptyAdapter } = yield* createManager();
+      yield* manager.open(openInput());
+      // An exited shell needs no kill timer at teardown, which this clock never fires.
+      yield* Effect.addFinalizer(() =>
+        Effect.sync(() => ptyAdapter.processes[0]?.emitExit({ exitCode: 0, signal: 0 })),
+      );
+      const print = yield* makePrinter(manager, ptyAdapter);
+
+      yield* print("prompt \u001b[0c");
+      // Each query gets its own 10 s window.
+      yield* TestClock.adjust("9 seconds");
+      yield* print("\u001b[c");
+      yield* TestClock.adjust("1 seconds");
+      expect(yield* attachOnce(manager)).toEqual(["prompt ", "\u001b[0c\u001b[c"]);
+      yield* TestClock.adjust("1 millis");
+      expect(yield* attachOnce(manager)).toEqual(["prompt ", "\u001b[c"]);
+      yield* manager.write({
+        threadId: "thread-1",
+        terminalId: DEFAULT_TERMINAL_ID,
+        data: "\u001b[?62;22c",
+      });
+      expect(yield* attachOnce(manager)).toEqual(["prompt "]);
+      yield* print("\u001b[c");
+      yield* TestClock.adjust("10001 millis");
+      expect(yield* attachOnce(manager)).toEqual(["prompt "]);
+    }).pipe(Effect.provide(TestClock.layer())),
+  );
+
+  it.effect("does not renew query expiry while output publication is suspended", () =>
+    Effect.gen(function* () {
+      const { manager, ptyAdapter } = yield* createManager();
+      yield* manager.open(openInput());
+      const shell = ptyAdapter.processes[0]!;
+      yield* Effect.addFinalizer(() =>
+        Effect.sync(() => shell.emitExit({ exitCode: 0, signal: 0 })),
+      );
+      const held = yield* Deferred.make<void>();
+      const release = yield* Deferred.make<void>();
+      const queried = yield* Deferred.make<void>();
+      const stopWatching = yield* manager.subscribe((event) =>
+        event.type !== "output"
+          ? Effect.void
+          : event.data === "first"
+            ? Deferred.succeed(held, undefined).pipe(Effect.andThen(Deferred.await(release)))
+            : Deferred.succeed(queried, undefined).pipe(Effect.asVoid),
+      );
+      yield* Effect.addFinalizer(() => Effect.sync(stopWatching));
+      shell.emitData("first");
+      yield* Deferred.await(held);
+      shell.emitData("\u001b[c");
+      yield* TestClock.adjust("11 seconds");
+      yield* Deferred.succeed(release, undefined);
+      yield* Deferred.await(queried);
+      expect(yield* attachOnce(manager)).toEqual(["first"]);
+    }).pipe(Effect.provide(TestClock.layer())),
+  );
+
+  it.effect("drops live output that its attach snapshot already covers", () =>
+    Effect.gen(function* () {
+      const { manager, ptyAdapter } = yield* createManager();
+      yield* manager.open(openInput());
+      // Hold the output's publish after the drain has committed it to the session.
+      const held = yield* Deferred.make<void>();
+      const release = yield* Deferred.make<void>();
+      const stopHolding = yield* manager.subscribe((event) =>
+        event.type === "output"
+          ? Deferred.succeed(held, undefined).pipe(Effect.andThen(Deferred.await(release)))
+          : Effect.void,
+      );
+      yield* Effect.addFinalizer(() => Effect.sync(stopHolding));
+      // It ends mid-sequence, which history holds back for the next output to finish.
+      ptyAdapter.processes[0]?.emitData("prompt \u001b[0c\u001b[");
+      yield* Deferred.await(held);
+
+      const events: TerminalAttachStreamEvent[] = [];
+      const detach = yield* manager.attachStream(openInput(), (event) =>
+        Effect.sync(() => events.push(event)),
+      );
+      yield* Effect.addFinalizer(() => Effect.sync(detach));
+      // A newer event reaching the stream first does not make the held output new.
+      yield* manager.clear({ threadId: "thread-1", terminalId: DEFAULT_TERMINAL_ID });
+      const published = yield* Deferred.make<void>();
+      const stopWatching = yield* manager.subscribe((event) =>
+        event.type === "output"
+          ? Deferred.succeed(published, undefined).pipe(Effect.asVoid)
+          : Effect.void,
+      );
+      yield* Effect.addFinalizer(() => Effect.sync(stopWatching));
+      // The held publish is still looping over listeners, so it reaches this
+      // stream, which subscribed meanwhile, after the stream has gone live.
+      yield* Deferred.succeed(release, undefined);
+      yield* Deferred.await(published);
+
+      expect(attachTranscript(events)).toEqual(["prompt ", "\u001b[0c\u001b[", "cleared"]);
     }),
   );
 
@@ -2719,6 +3021,12 @@ it.layer(
         const { manager, ptyAdapter } = yield* createManager(5, {
           ptyAdapter: new FakePtyAdapter("async"),
         });
+        const stopStartup = yield* manager.subscribe((event) =>
+          event.type === "started"
+            ? Effect.sync(() => ptyAdapter.processes[0]?.emitData("prompt \u001b[0c"))
+            : Effect.void,
+        );
+        yield* Effect.addFinalizer(() => Effect.sync(stopStartup));
         const attachEvents = yield* Ref.make<ReadonlyArray<TerminalAttachStreamEvent>>([]);
         const unsubscribe = yield* manager.attachStream(openInput(), (event) =>
           Ref.update(attachEvents, (events) => [...events, event]),
@@ -2735,20 +3043,17 @@ it.layer(
             snapshot: {
               threadId: "thread-1",
               terminalId: DEFAULT_TERMINAL_ID,
+              history: "prompt ",
             },
           },
+          { type: "output", data: "\u001b[0c" },
         ]);
 
-        process.emitData("hello from attach\n");
-
-        yield* waitFor(
-          Effect.map(Ref.get(attachEvents), (events) =>
-            events.some((event) => event.type === "output" && event.data === "hello from attach\n"),
-          ),
-          "1200 millis",
-        );
+        const print = yield* makePrinter(manager, ptyAdapter);
+        yield* print("hello from attach\n");
 
         const events = yield* Ref.get(attachEvents);
+        expect(attachTranscript(events)).toEqual(["prompt ", "\u001b[0c", "hello from attach\n"]);
         expect(events.filter((event) => event.type === "snapshot")).toHaveLength(1);
       }),
   );
@@ -2764,7 +3069,7 @@ it.layer(
           ? Deferred.succeed(historyReceived, undefined).pipe(Effect.asVoid)
           : Effect.void,
       );
-      process.emitData("existing history\n");
+      process.emitData("existing history\n\u001b[0c");
       yield* Deferred.await(historyReceived);
       unsubscribeHistory();
 

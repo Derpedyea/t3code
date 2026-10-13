@@ -113,12 +113,18 @@ function writeSystemMessage(terminal: GhosttyTerminalSurface, message: string): 
   terminal.write(`\r\n[terminal] ${message}\r\n`);
 }
 
+const renderedTerminalResets = new WeakSet<TerminalOutputCursor["reset"]>();
+
+/** A reset replays `data` muted and answers `live` queries only on its first render. */
 export function writeTerminalOutputUpdate(
   terminal: Pick<GhosttyTerminalSurface, "resetAndWrite" | "write">,
   update: TerminalOutputUpdate,
+  answerLive = !renderedTerminalResets.has(update.cursor.reset),
 ): void {
   if (update.type === "reset") {
-    terminal.resetAndWrite(update.data);
+    terminal.resetAndWrite(answerLive ? update.data : `${update.data}${update.live}`);
+    if (answerLive && update.live.length > 0) terminal.write(update.live);
+    renderedTerminalResets.add(update.cursor.reset);
   } else if (update.type === "append") {
     terminal.write(update.data);
   }
@@ -131,7 +137,7 @@ export function synchronizeTerminalOutput(
 ): TerminalOutputCursor {
   if (session.version === 0) return cursor;
   const update = readTerminalOutputUpdate(session.output, cursor);
-  writeTerminalOutputUpdate(terminal, update);
+  writeTerminalOutputUpdate(terminal, update, true);
   terminal.clearSelection();
   return update.cursor;
 }
@@ -640,9 +646,7 @@ export function TerminalViewport({
         latestSession.output,
         INITIAL_TERMINAL_OUTPUT_CURSOR,
       );
-      if (initialOutput.type === "reset" && initialOutput.data.length > 0) {
-        writeTerminalOutputUpdate(terminal, initialOutput);
-      }
+      writeTerminalOutputUpdate(terminal, initialOutput);
       outputCursorRef.current = initialOutput.cursor;
       if (latestSession.error !== null) writeSystemMessage(terminal, latestSession.error);
       // Attaching to a session that already exited must still run exit handling

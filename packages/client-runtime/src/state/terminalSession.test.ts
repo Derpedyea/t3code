@@ -331,7 +331,8 @@ describe("terminal session reducers", () => {
     });
     expect(readTerminalOutputUpdate(state.output, staleCursor)).toMatchObject({
       type: "reset",
-      data: "lo world",
+      data: "",
+      live: "lo world",
     });
     expect(state.output.retainedBytes).toBe(8);
   });
@@ -437,7 +438,6 @@ describe("terminal session reducers", () => {
       type: "snapshot",
       snapshot: { ...BASE_SNAPSHOT, history: "other" },
     });
-    expect(next.output.resetVersion).toBe(first.output.resetVersion);
     expect(next.output.nextOffset).toBe(first.output.nextOffset);
     expect(readTerminalOutputUpdate(next.output, cursor)).toMatchObject({
       type: "reset",
