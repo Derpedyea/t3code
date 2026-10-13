@@ -98,8 +98,6 @@ export {
 const DEFAULT_HISTORY_LINE_LIMIT = 5_000;
 const DEFAULT_HISTORY_BYTE_LIMIT = 8 * 1024 * 1024;
 const MAX_HISTORY_CHUNK_LENGTH = 16 * 1024;
-/** Bounds the unfinished sequence an attach replays; its introducer keeps the rest opaque. */
-const MAX_UNFINISHED_SEQUENCE_REPLAY = 4096;
 const DEFAULT_PERSIST_DEBOUNCE_MS = 250;
 const DEFAULT_SUBPROCESS_POLL_INTERVAL_MS = 1_000;
 const MAX_SUBPROCESS_POLL_INTERVAL_MS = 60_000;
@@ -1038,6 +1036,10 @@ function isPrimaryAttributesQuery(body: string, finalByte: string | undefined): 
   return finalByte === "c" && /^0*$/.test(body);
 }
 
+/** An unfinished sequence that the next read may still complete into DA1. */
+// eslint-disable-next-line no-control-regex -- ESC and CSI introducers start the prefix.
+const PRIMARY_ATTRIBUTES_PREFIX = /^(?:\u001b(?:\[0{0,8})?|\u009b0{0,8})$/;
+
 /** Ghostty's DA1 answer, so a shell sees the same terminal whichever side replies. */
 const PRIMARY_ATTRIBUTES_REPLY = "\u001b[?62;22c";
 
@@ -1619,9 +1621,11 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
     answeringAttaches.set(key, (answeringAttaches.get(key) ?? 0) + 1);
     return {
       snapshot: snapshot(session),
-      // History holds back an unfinished sequence. Replaying it after the snapshot
-      // lets the renderer complete a query whose final bytes arrive live.
-      unfinished: session.pendingHistoryControlSequence.slice(0, MAX_UNFINISHED_SEQUENCE_REPLAY),
+      // History holds back an unfinished sequence. Replaying a possible DA1 start lets
+      // the renderer complete a query whose final bytes arrive live.
+      unfinished: PRIMARY_ATTRIBUTES_PREFIX.test(session.pendingHistoryControlSequence)
+        ? session.pendingHistoryControlSequence
+        : "",
       release: () => {
         const count = (answeringAttaches.get(key) ?? 1) - 1;
         if (count > 0) answeringAttaches.set(key, count);

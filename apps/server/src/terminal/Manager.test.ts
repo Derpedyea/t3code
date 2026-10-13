@@ -524,15 +524,23 @@ it.layer(
         "\u001b[0",
         "c",
       ]);
-      // The replay is capped; its introducer keeps an oversized payload opaque.
-      const longOsc = `\u001b]10;${"a".repeat(5_000)}`;
-      yield* print(longOsc);
-      const later: TerminalAttachStreamEvent[] = [];
-      const detachLater = yield* manager.attachStream(openInput(), (event) =>
-        Effect.sync(() => later.push(event)),
-      );
-      detachLater();
-      expect(later.at(-1)).toMatchObject({ type: "output", data: longOsc.slice(0, 4096) });
+      // Only a start that could still become DA1 replays. Other unfinished sequences,
+      // here an OSC awaiting the `\` of its terminator, stay held back as before.
+      for (const [pending, replayed] of [
+        ["\u001b", ["\u001b"]],
+        ["\u001b]10;rgb:0/0/0\u001b", []],
+      ] as const) {
+        yield* print(pending);
+        const later: TerminalAttachStreamEvent[] = [];
+        const detachLater = yield* manager.attachStream(openInput(), (event) =>
+          Effect.sync(() => later.push(event)),
+        );
+        detachLater();
+        expect(later.flatMap((event) => (event.type === "output" ? [event.data] : []))).toEqual(
+          replayed,
+        );
+        yield* print("\\");
+      }
       yield* manager.close({ threadId: "thread-1", terminalId: DEFAULT_TERMINAL_ID });
       yield* manager.open(openInput());
       const reopened = ptyAdapter.processes[1]!;
