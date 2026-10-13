@@ -115,16 +115,17 @@ function writeSystemMessage(terminal: GhosttyTerminalSurface, message: string): 
 
 const renderedTerminalResets = new WeakSet<TerminalOutputCursor["reset"]>();
 
-/** A reset replays `data` muted and answers `live` queries only on its first render. */
+/** A reset replays snapshot text muted and answers live queries only on its first render. */
 export function writeTerminalOutputUpdate(
   terminal: Pick<GhosttyTerminalSurface, "resetAndWrite" | "write">,
   update: TerminalOutputUpdate,
-  answerLive = !renderedTerminalResets.has(update.cursor.reset),
 ): void {
   if (update.type === "reset") {
-    terminal.resetAndWrite(answerLive ? update.data : `${update.data}${update.live}`);
-    if (answerLive && update.live.length > 0) terminal.write(update.live);
-    renderedTerminalResets.add(update.cursor.reset);
+    const { data, cursor } = update;
+    const live = renderedTerminalResets.has(cursor.reset) ? data.length : update.liveFrom;
+    terminal.resetAndWrite(data.slice(0, live));
+    if (live < data.length) terminal.write(data.slice(live));
+    renderedTerminalResets.add(cursor.reset);
   } else if (update.type === "append") {
     terminal.write(update.data);
   }
@@ -137,7 +138,7 @@ export function synchronizeTerminalOutput(
 ): TerminalOutputCursor {
   if (session.version === 0) return cursor;
   const update = readTerminalOutputUpdate(session.output, cursor);
-  writeTerminalOutputUpdate(terminal, update, true);
+  writeTerminalOutputUpdate(terminal, update);
   terminal.clearSelection();
   return update.cursor;
 }

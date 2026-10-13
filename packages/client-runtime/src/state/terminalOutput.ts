@@ -36,8 +36,8 @@ export type TerminalOutputUpdate =
   | {
       readonly type: "reset";
       readonly data: string;
-      /** Output no renderer has parsed, written after `data`; its queries still need answers. */
-      readonly live: string;
+      /** Where output no renderer has parsed begins in `data`; its queries still need answers. */
+      readonly liveFrom: number;
       readonly cursor: TerminalOutputCursor;
     }
   | {
@@ -307,12 +307,10 @@ export function readTerminalOutputUpdate(
     cursor.reset !== output.reset ||
     cursor.offset < firstOffset
   ) {
-    const text = terminalOutputText(output);
-    const split = Math.max(0, output.liveOffset - firstOffset);
     return {
       type: "reset",
-      data: text.slice(0, split),
-      live: text.slice(split),
+      data: terminalOutputText(output),
+      liveFrom: Math.max(0, output.liveOffset - firstOffset),
       cursor: nextCursor,
     };
   }

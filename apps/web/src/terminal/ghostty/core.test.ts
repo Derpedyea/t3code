@@ -326,26 +326,21 @@ describe("GhosttyTerminalCore snapshots", () => {
   });
 
   it("recovers a lagging renderer once from bounded output and resumes appending", async () => {
-    const replies: string[] = [];
-    const [core, reference] = await Promise.all([
-      createCore((data) => replies.push(data)),
-      createCore(),
-    ]);
+    const [core, reference] = await Promise.all([createCore(), createCore()]);
     let state = createSession("\x1b[31mold");
     const initial = readTerminalOutputUpdate(state.output, INITIAL_TERMINAL_OUTPUT_CURSOR);
     writeTerminalOutputUpdate(core, initial);
     const reset = vi.spyOn(core, "resetAndWrite");
     const data = "line\r\n".repeat(8192);
     for (let index = 0; index < 16; index += 1) state = append(state, data);
-    state = append(state, "\x1b[5n");
 
     const recovery = readTerminalOutputUpdate(state.output, initial.cursor);
     if (recovery.type !== "reset") throw new Error(`Expected reset, received ${recovery.type}`);
-    const retained = `${recovery.data}${recovery.live}`;
-    expect(new TextEncoder().encode(retained).byteLength).toBe(DEFAULT_MAX_TERMINAL_BUFFER_BYTES);
-    writeTerminalOutputUpdate(core, recovery, true);
-    expect(replies).toEqual(["\x1b[0n"]);
-    reference.resetAndWrite(retained);
+    expect(new TextEncoder().encode(recovery.data).byteLength).toBe(
+      DEFAULT_MAX_TERMINAL_BUFFER_BYTES,
+    );
+    writeTerminalOutputUpdate(core, recovery);
+    reference.resetAndWrite(recovery.data);
     expect(core.snapshot()).toEqual(reference.snapshot());
 
     state = append(state, "\r\nlatest");
@@ -372,7 +367,7 @@ describe("GhosttyTerminalCore snapshots", () => {
     state = append(state, "🙂 load\x1b[5n");
     const core = await pendingCore;
     const first = readTerminalOutputUpdate(state.output, cursor);
-    writeTerminalOutputUpdate(core, first, late ? true : undefined);
+    writeTerminalOutputUpdate(core, first);
     expect(replies).toEqual(["\x1b[0n"]);
     const reference = await createCore();
     reference.resetAndWrite(terminalOutputText(state.output));
@@ -394,14 +389,6 @@ describe("GhosttyTerminalCore snapshots", () => {
       readTerminalOutputUpdate(state.output, INITIAL_TERMINAL_OUTPUT_CURSOR),
     );
     expect(replies).toEqual(["\x1b[0n"]);
-
-    // A fresh snapshot on the same subscription allows new replies after reconnect.
-    state = append(createSession("before", state), "\x1b[5n");
-    writeTerminalOutputUpdate(
-      remounted,
-      readTerminalOutputUpdate(state.output, INITIAL_TERMINAL_OUTPUT_CURSOR),
-    );
-    expect(replies).toEqual(["\x1b[0n", "\x1b[0n"]);
   });
 
   it("resets real Ghostty for a repeated snapshot, clear, restart, and a fresh attach", async () => {
