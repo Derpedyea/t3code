@@ -407,19 +407,18 @@ function snapshot(session: TerminalSessionState): TerminalSessionSnapshot {
 
 /** Revalidate captured requests after snapshot delivery, which may suspend. */
 function attachState(session: TerminalSessionState, now?: number) {
+  // Exit and restart drop stored requests, so captured identities cannot replay.
   const pending = new Set(now === undefined ? [] : pendingQueries(session, now));
-  const process = session.process;
+  // The snapshot omits this unfinished sequence; live clients already received it.
   // Retain the introducer so oversized string payloads remain opaque to the renderer.
   const prefix = session.pendingHistoryControlSequence.slice(0, MAX_UNANSWERED_QUERIES_LENGTH);
   return {
     snapshot: snapshot(session),
     replay: (at: number) =>
-      session.process === process && session.status === "running"
-        ? `${pendingQueries(session, at)
-            .filter((entry) => pending.has(entry))
-            .map((entry) => entry.text)
-            .join("")}${prefix}`
-        : "",
+      `${pendingQueries(session, at)
+        .filter((entry) => pending.has(entry))
+        .map((entry) => entry.text)
+        .join("")}${prefix}`,
   };
 }
 
