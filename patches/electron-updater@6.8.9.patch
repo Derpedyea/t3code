@@ -1,0 +1,44 @@
+diff --git a/out/AppImageUpdater.js b/out/AppImageUpdater.js
+index 452e93f819eaeb5e6532a831255adc70d854df4b..a9ae497c1049c2e2f9471583039ade64d54c43f1 100644
+--- a/out/AppImageUpdater.js
++++ b/out/AppImageUpdater.js
+@@ -77,8 +77,6 @@ class AppImageUpdater extends BaseUpdater_1.BaseUpdater {
+         if (!path.isAbsolute(appImageFile) || appImageFile.includes("\0")) {
+             throw (0, builder_util_runtime_1.newError)(`APPIMAGE env is not a valid absolute path: "${appImageFile}"`, "ERR_UPDATER_OLD_FILE_NOT_FOUND");
+         }
+-        // https://stackoverflow.com/a/1712051/1910191
+-        (0, fs_1.unlinkSync)(appImageFile);
+         let destination;
+         const existingBaseName = path.basename(appImageFile);
+         const installerPath = this.installerPath;
+@@ -95,8 +93,29 @@ class AppImageUpdater extends BaseUpdater_1.BaseUpdater {
+         else {
+             destination = path.join(path.dirname(appImageFile), path.basename(installerPath));
+         }
+-        (0, child_process_1.execFileSync)("mv", ["-f", installerPath, destination]);
++        // T3 Code: swap the AppImage in with one rename instead of unlink + `mv`. The `mv`
++        // PATH lookup fails with ENOTCONN on a dead AppImage mount left on PATH, and the
++        // unlink before it had already removed the only copy of the app. Staging beside the
++        // destination keeps the rename on one filesystem, and the running AppImage stays in
++        // place until the new one is complete.
++        const stagedPath = path.join(path.dirname(destination), `.${path.basename(destination)}.update`);
++        (0, fs_1.rmSync)(stagedPath, { force: true });
++        try {
++            try {
++                (0, fs_1.linkSync)(installerPath, stagedPath);
++            }
++            catch {
++                (0, fs_1.copyFileSync)(installerPath, stagedPath);
++            }
++            (0, fs_1.renameSync)(stagedPath, destination);
++        }
++        catch (e) {
++            (0, fs_1.rmSync)(stagedPath, { force: true });
++            throw e;
++        }
++        (0, fs_1.rmSync)(installerPath, { force: true });
+         if (destination !== appImageFile) {
++            (0, fs_1.rmSync)(appImageFile, { force: true });
+             this.emit("appimage-filename-updated", destination);
+         }
+         const env = {

@@ -364,6 +364,9 @@ patchedDependencies:
   # skip, the fingerprint silently drops every Expo native module and OTAs reach stale binaries.
   "@expo/fingerprint@0.21.5": patches/@expo__fingerprint@0.21.5.patch
   app-builder-lib@26.16.1: patches/app-builder-lib@26.16.1.patch
+  # Linux: an AppImage update renames the new file over the old one instead of deleting the
+  # old one before a PATH-resolved `mv`, so a failed install still leaves an app to launch.
+  electron-updater@6.8.9: patches/electron-updater@6.8.9.patch
 
 peerDependencyRules:
   allowAny:
