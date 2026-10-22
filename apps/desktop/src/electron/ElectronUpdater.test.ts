@@ -1,10 +1,11 @@
-// @effect-diagnostics nodeBuiltinImport:off - Exercises the patched AppImage install on a real filesystem.
+// @effect-diagnostics nodeBuiltinImport:off - Exercises the AppImage install on a real filesystem.
 import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 
-import { AppImageUpdater } from "electron-updater";
 import { afterEach, expect, it, vi } from "vite-plus/test";
+
+import { AtomicAppImageUpdater } from "./ElectronUpdater.ts";
 
 afterEach(() => vi.unstubAllEnvs());
 
@@ -19,7 +20,7 @@ const installAppImage = (removeInstaller: boolean) => {
   vi.stubEnv("PATH", NodePath.join(root, "empty"));
   const updater = { installerPath, spawnLog: async () => true, emit: () => true };
   try {
-    AppImageUpdater.prototype["doInstall"].call(updater as unknown as AppImageUpdater, {
+    AtomicAppImageUpdater.prototype["doInstall"].call(updater as unknown as AtomicAppImageUpdater, {
       isSilent: true,
       isForceRunAfter: true,
       isAdminRightsRequired: false,

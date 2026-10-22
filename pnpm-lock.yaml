@@ -341,7 +341,6 @@ patchedDependencies:
   alchemy@2.0.0-beta.80: bea1b6c0c0b23157fd5f439a1d7feff430f28ac1621ba135d8a13eeec60ccacd
   app-builder-lib@26.16.1: a28c2dfcfc2b90d6c6247e199e6537391db9ecd941854c650910d607442512d3
   dbus-next@0.10.2: cfff57561b0ee59b5addb3b2e6c6f20906e967507a530ab67e8db8108e520ba4
-  electron-updater@6.8.9: 3b5108258e7f60fb24aef159bcfda355ecf8af2bacc746ba1c6fff5116e8d666
   expo-audio@58.0.9: 2c2f8c73a23d48804c8b537b8cd73c25eb331aa47d82eaa481c6766cb81e5add
   expo-modules-core@58.0.22: f0b0fd100550ed76e5c25b4d13eb7c9ff62825f8f197c53edf7bf447c50c9fb7
   expo-network@58.0.3: cd09b6d1744dde4efa081b5619ebcff38877d98f7502a51cab121629dece8237
@@ -433,7 +432,7 @@ importers:
         version: 8.2.0
       electron-updater:
         specifier: ^6.8.9
-        version: 6.8.9(patch_hash=3b5108258e7f60fb24aef159bcfda355ecf8af2bacc746ba1c6fff5116e8d666)(supports-color@8.1.1)
+        version: 6.8.9(supports-color@8.1.1)
       electron-webauthn:
         specifier: 'catalog:'
         version: 1.3.1(typescript@7.0.2)
@@ -18411,7 +18410,7 @@ snapshots:
 
   electron-to-chromium@1.5.430: {}
 
-  electron-updater@6.8.9(patch_hash=3b5108258e7f60fb24aef159bcfda355ecf8af2bacc746ba1c6fff5116e8d666)(supports-color@8.1.1):
+  electron-updater@6.8.9(supports-color@8.1.1):
     dependencies:
       builder-util-runtime: 9.7.0(supports-color@8.1.1)
       fs-extra: 10.1.0
