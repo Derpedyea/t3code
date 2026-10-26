@@ -115,8 +115,12 @@ export function buildTraitsTriggerDisplay(input: {
   let speedLabel: string | null = null;
   let reasoningLabelIndex = -1;
   let reasoningLevel: number | null = null;
+  let thinkingOff = false;
   const labels: Array<string> = [];
   for (const descriptor of input.descriptors) {
+    if (descriptor.id === "thinking" && descriptor.type === "boolean") {
+      thinkingOff = descriptor.currentValue === false;
+    }
     if (descriptor.id === "fastMode" && descriptor.type === "boolean") {
       speedLabel = descriptor.currentValue === true ? "Fast" : null;
       fastModeFallbackLabel = speedLabel ?? "Normal";
@@ -164,19 +168,18 @@ export function buildTraitsTriggerDisplay(input: {
       ) {
         reasoningLabelIndex = labels.length;
         reasoningLevel = getReasoningLevel(
-          input.ultrathinkPromptControlled && descriptor.id === input.primarySelectDescriptorId
-            ? descriptor.promptInjectedValues?.[0]
-            : getProviderOptionCurrentValue(
-                descriptor,
-                input.modelSelection,
-                input.reportedModelSelection,
-              ),
+          getProviderOptionCurrentValue(
+            descriptor,
+            input.modelSelection,
+            input.reportedModelSelection,
+          ),
         );
       }
       labels.push(label);
     }
   }
 
+  if (thinkingOff) reasoningLevel = 0;
   if (labels.length === 0 && fastModeFallbackLabel !== null) {
     return { label: fastModeFallbackLabel, reasoningLevel };
   }
@@ -191,23 +194,24 @@ export function buildTraitsTriggerDisplay(input: {
 }
 
 // One scale for every provider so the same effort reads the same on any model.
-const REASONING_LEVEL_RANKS: Readonly<Record<string, number>> = {
-  none: 0,
-  off: 0,
-  minimal: 1,
-  low: 2,
-  medium: 3,
-  high: 4,
-  xhigh: 5,
+// Ultrathink is absent: it leaves the effort sent to Claude unchanged.
+const REASONING_LEVEL_RANKS: ReadonlyMap<string, number> = new Map([
+  ["none", 0],
+  ["off", 0],
+  ["minimal", 1],
+  ["low", 2],
+  ["medium", 3],
+  ["high", 4],
+  ["xhigh", 5],
   // Claude runs Ultracode at xhigh effort.
-  ultracode: 5,
-  max: 6,
-  ultra: 7,
-  ultrathink: 7,
-};
+  ["ultracode", 5],
+  ["max", 6],
+  ["ultra", 7],
+]);
 const MAX_REASONING_LEVEL_RANK = 7;
 
 function getReasoningLevel(value: string | boolean | undefined): number | null {
-  const rank = typeof value === "string" ? REASONING_LEVEL_RANKS[value.toLowerCase()] : undefined;
+  const rank =
+    typeof value === "string" ? REASONING_LEVEL_RANKS.get(value.toLowerCase()) : undefined;
   return rank === undefined ? null : rank / MAX_REASONING_LEVEL_RANK;
 }
