@@ -110,10 +110,11 @@ export function buildTraitsTriggerDisplay(input: {
   ultrathinkPromptControlled: boolean;
   modelSelection?: ModelSelection | null;
   reportedModelSelection?: ModelSelection | null | undefined;
-}): { label: string } {
+}): { label: string; reasoningLevel: number | null } {
   let fastModeFallbackLabel: string | null = null;
   let speedLabel: string | null = null;
   let reasoningLabelIndex = -1;
+  let reasoningLevel: number | null = null;
   const labels: Array<string> = [];
   for (const descriptor of input.descriptors) {
     if (descriptor.id === "fastMode" && descriptor.type === "boolean") {
@@ -162,13 +163,22 @@ export function buildTraitsTriggerDisplay(input: {
         REASONING_SELECT_DESCRIPTOR_IDS.has(descriptor.id)
       ) {
         reasoningLabelIndex = labels.length;
+        reasoningLevel = getReasoningLevel(
+          input.ultrathinkPromptControlled && descriptor.id === input.primarySelectDescriptorId
+            ? descriptor.promptInjectedValues?.[0]
+            : getProviderOptionCurrentValue(
+                descriptor,
+                input.modelSelection,
+                input.reportedModelSelection,
+              ),
+        );
       }
       labels.push(label);
     }
   }
 
   if (labels.length === 0 && fastModeFallbackLabel !== null) {
-    return { label: fastModeFallbackLabel };
+    return { label: fastModeFallbackLabel, reasoningLevel };
   }
   if (speedLabel) {
     if (reasoningLabelIndex >= 0) {
@@ -177,5 +187,27 @@ export function buildTraitsTriggerDisplay(input: {
       labels.push(speedLabel);
     }
   }
-  return { label: labels.join(" · ") };
+  return { label: labels.join(" · "), reasoningLevel };
+}
+
+// One scale for every provider so the same effort reads the same on any model.
+const REASONING_LEVEL_RANKS: Readonly<Record<string, number>> = {
+  none: 0,
+  off: 0,
+  minimal: 1,
+  low: 2,
+  medium: 3,
+  high: 4,
+  xhigh: 5,
+  // Claude runs Ultracode at xhigh effort.
+  ultracode: 5,
+  max: 6,
+  ultra: 7,
+  ultrathink: 7,
+};
+const MAX_REASONING_LEVEL_RANK = 7;
+
+function getReasoningLevel(value: string | boolean | undefined): number | null {
+  const rank = typeof value === "string" ? REASONING_LEVEL_RANKS[value.toLowerCase()] : undefined;
+  return rank === undefined ? null : rank / MAX_REASONING_LEVEL_RANK;
 }

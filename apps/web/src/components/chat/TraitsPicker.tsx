@@ -24,7 +24,7 @@ import {
   normalizeModelSlug,
 } from "@t3tools/shared/model";
 import { memo } from "react";
-import { BrainIcon, GaugeIcon } from "lucide-react";
+import { GaugeIcon } from "lucide-react";
 import {
   Menu,
   MenuGroup,
@@ -49,6 +49,26 @@ import { useComposerMenuProps } from "./composerEventScope";
 import { useComposerMenuState } from "./useComposerMenuState";
 
 type ProviderOptions = ReadonlyArray<ProviderOptionSelection>;
+
+function TraitsTriggerIcon({ level, size }: { level: number | null; size: ComposerControlSize }) {
+  if (level === null) return <ComposerControlIcon icon={GaugeIcon} size={size} />;
+  return (
+    <svg
+      aria-hidden="true"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={2}
+      strokeLinecap="round"
+      className={cn("shrink-0", size === "xs" ? "size-3" : "size-4")}
+      data-composer-control-icon
+    >
+      <path d="M3.34 19a10 10 0 1 1 17.32 0" opacity={0.3} />
+      <path d="M3.34 19a10 10 0 1 1 17.32 0" pathLength={1} strokeDasharray={`${level} 2`} />
+      <path d="M12 14V8.34" transform={`rotate(${240 * level - 120} 12 14)`} />
+    </svg>
+  );
+}
 
 /**
  * All the picker reads from the prompt while rendering. Passing this instead of
@@ -555,7 +575,7 @@ export const TraitsPicker = memo(function TraitsPicker({
     return null;
   }
 
-  const { label: triggerLabel } = buildTraitsTriggerDisplay({
+  const { label: triggerLabel, reasoningLevel } = buildTraitsTriggerDisplay({
     provider,
     descriptors,
     primarySelectDescriptorId: primarySelectDescriptor?.id ?? null,
@@ -600,8 +620,7 @@ export const TraitsPicker = memo(function TraitsPicker({
                 size === "xs" ? "gap-1" : "gap-1.5",
               )}
             >
-              <ComposerControlIcon icon={BrainIcon} size={size} className="redesign:hidden" />
-              <ComposerControlIcon icon={GaugeIcon} size={size} className="hidden redesign:block" />
+              <TraitsTriggerIcon level={reasoningLevel} size={size} />
               <span data-composer-control-label className="min-w-0 truncate">
                 {triggerLabel}
               </span>
@@ -609,8 +628,7 @@ export const TraitsPicker = memo(function TraitsPicker({
             </span>
           ) : (
             <>
-              <ComposerControlIcon icon={BrainIcon} size={size} className="redesign:hidden" />
-              <ComposerControlIcon icon={GaugeIcon} size={size} className="hidden redesign:block" />
+              <TraitsTriggerIcon level={reasoningLevel} size={size} />
               <span data-composer-control-label>{triggerLabel}</span>
               <ComposerControlChevron size={size} />
             </>
