@@ -64,7 +64,9 @@ function TraitsTriggerIcon({ level, size }: { level: number | null; size: Compos
       data-composer-control-icon
     >
       <path d="M3.34 19a10 10 0 1 1 17.32 0" opacity={0.3} />
-      <path d="M3.34 19a10 10 0 1 1 17.32 0" pathLength={1} strokeDasharray={`${level} 2`} />
+      {level > 0 && (
+        <path d="M3.34 19a10 10 0 1 1 17.32 0" pathLength={1} strokeDasharray={`${level} 2`} />
+      )}
       <path d="M12 14V8.34" transform={`rotate(${240 * level - 120} 12 14)`} />
     </svg>
   );
