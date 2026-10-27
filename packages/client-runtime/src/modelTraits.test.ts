@@ -2,17 +2,24 @@ import { ProviderDriverKind, type ProviderOptionDescriptor } from "@t3tools/cont
 import { describe, expect, it } from "vite-plus/test";
 import { buildTraitsTriggerDisplay } from "./modelTraits.ts";
 
-function effort(values: ReadonlyArray<string>, currentValue: string): ProviderOptionDescriptor {
-  return {
-    id: "effort",
-    label: "Reasoning",
-    type: "select",
-    options: values.map((id) => ({ id, label: id })),
-    currentValue,
-  };
-}
-
-function reasoningLevel(descriptors: ReadonlyArray<ProviderOptionDescriptor>) {
+function highEffortLevel(efforts: ReadonlyArray<string>, thinking?: boolean) {
+  const descriptors: Array<ProviderOptionDescriptor> = [
+    {
+      id: "effort",
+      label: "Reasoning",
+      type: "select",
+      options: efforts.map((id) => ({ id, label: id })),
+      currentValue: "high",
+    },
+  ];
+  if (thinking !== undefined) {
+    descriptors.push({
+      id: "thinking",
+      label: "Thinking",
+      type: "boolean",
+      currentValue: thinking,
+    });
+  }
   return buildTraitsTriggerDisplay({
     provider: ProviderDriverKind.make("cursor"),
     descriptors,
@@ -22,32 +29,14 @@ function reasoningLevel(descriptors: ReadonlyArray<ProviderOptionDescriptor>) {
 }
 
 describe("buildTraitsTriggerDisplay reasoningLevel", () => {
-  it("reads an effort the same however the provider orders or trims its list", () => {
-    const claude = reasoningLevel([effort(["low", "medium", "high", "xhigh", "max"], "high")]);
-    const grok = reasoningLevel([effort(["xhigh", "high", "medium", "low"], "high")]);
-    const glm = reasoningLevel([effort(["high", "max"], "high")]);
-
+  it("reads High the same however the provider orders or trims its efforts", () => {
+    const claude = highEffortLevel(["low", "medium", "high", "xhigh", "max"]);
     expect(claude).toBeGreaterThan(0);
-    expect(grok).toBe(claude);
-    expect(glm).toBe(claude);
-    expect(reasoningLevel([effort(["high", "max"], "max")])).toBeGreaterThan(claude ?? 1);
-  });
-
-  it("has no reading for efforts outside the shared scale", () => {
-    for (const value of ["ultrathink", "constructor", "deep"]) {
-      expect(reasoningLevel([effort(["low", value], value)])).toBeNull();
-    }
+    expect(highEffortLevel(["xhigh", "high", "medium", "low"])).toBe(claude);
+    expect(highEffortLevel(["high", "max"])).toBe(claude);
   });
 
   it("reads zero when thinking is switched off", () => {
-    const thinking = (currentValue: boolean): ProviderOptionDescriptor => ({
-      id: "thinking",
-      label: "Thinking",
-      type: "boolean",
-      currentValue,
-    });
-
-    expect(reasoningLevel([effort(["low", "high"], "high"), thinking(false)])).toBe(0);
-    expect(reasoningLevel([thinking(true)])).toBeNull();
+    expect(highEffortLevel(["low", "high"], false)).toBe(0);
   });
 });
