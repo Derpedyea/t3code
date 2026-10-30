@@ -30,7 +30,11 @@ export function SidebarThreadUndoNotice() {
   if (!text) return null;
 
   return (
-    <SidebarMenuItem className="flex min-w-0 flex-1" aria-hidden={!summary} inert={!summary}>
+    <SidebarMenuItem
+      className="@container flex min-w-0 flex-1"
+      aria-hidden={!summary}
+      inert={!summary}
+    >
       <div
         onTransitionEnd={(event) => {
           if (!summary && event.target === event.currentTarget) setShownSummary(null);
@@ -47,7 +51,7 @@ export function SidebarThreadUndoNotice() {
           {/* The icon's negative margin cancels its width, so beside the label it sits in
               clipped space; once the label is too wide it wraps away and the icon shows. */}
           <span className="flex h-6 min-w-0 flex-wrap justify-end overflow-hidden">
-            <Undo2Icon className="-ml-4 h-6 w-4" />
+            <Undo2Icon className="-ml-4 h-6 w-4 @max-[1rem]:invisible" />
             <span>{threadUndoLabel(keybindings)}</span>
           </span>
         </InlineButton>
