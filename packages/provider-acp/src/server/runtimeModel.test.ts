@@ -1745,7 +1745,6 @@ describe("extractMcpToolCallIdentity", () => {
       "Running delegate_task",
       "Run mcp_t3-code_delegate_task",
       "Run mcp_t3-code_delegate_task?",
-      "Called delegate_task from t3-code",
     ]) {
       const toolCall = toolCallFromUpdate({
         sessionUpdate: "tool_call",

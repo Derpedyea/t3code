@@ -29,11 +29,21 @@ export function normalizeDevinSessionUpdate(
   return routed;
 }
 
+// Devin titles MCP calls "Called <tool> from <server>" and sends neither name as a field.
+const T3_MCP_CALL_TITLE = /^Called (?<tool>[A-Za-z0-9][A-Za-z0-9_.-]*) from t3-code$/;
+
 export function normalizeDevinToolCall(tool: AcpToolCallState): AcpToolCallState {
   const name = record(tool.data.meta)?.["cognition.ai/inferenceToolName"];
-  return typeof name === "string" && (!tool.title || tool.title === "Tool")
-    ? { ...tool, title: name }
-    : tool;
+  if (typeof name === "string" && (!tool.title || tool.title === "Tool")) {
+    return { ...tool, title: name };
+  }
+  const t3Tool =
+    typeof tool.data.title === "string"
+      ? T3_MCP_CALL_TITLE.exec(tool.data.title)?.groups?.tool
+      : undefined;
+  return t3Tool === undefined
+    ? tool
+    : { ...tool, data: { ...tool.data, title: `mcp__t3-code__${t3Tool}` } };
 }
 
 export function extractDevinSubagentUpdate(
